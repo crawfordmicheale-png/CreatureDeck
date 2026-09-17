@@ -1,0 +1,21 @@
+{
+  "name": "creaturedeck",
+  "version": "0.1.0",
+  "description": "A deck-building battler of creature cards with rarity tiers, power tiers, and per-copy leveling.",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=22.6.0"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-strip-types --test --test-reporter=spec \"test/**/*.test.ts\"",
+    "demo": "node --experimental-strip-types src/cli/demo.ts",
+    "check": "npm run typecheck && npm test",
+    "balance": "node --experimental-strip-types src/cli/balance.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.3",
+    "typescript": "^5.9.3"
+  }
+}
