@@ -16,6 +16,28 @@ Flicker       Common / Elite / L10      Mig 23  Vit 34  Spe 25  Gua  3   score 1
 
 Same printed card. Same power tier, same energy cost, near-identical power score — and three creatures that play nothing alike.
 
+## Play it
+
+```bash
+npm install
+npm run build:web      # bundles the engine + UI into web/dist/index.html
+```
+
+Open `web/dist/index.html` in a browser. It is one self-contained file with no
+runtime dependencies — the whole game, engine included, is about 66 kB.
+
+A run is five battles against escalating opponents. Deploy creatures from your
+hand by clicking them, end the turn, and watch combat resolve. Between battles
+your cards earn XP and growth points, and you decide — per card, per stat —
+where those points go. Push a card far enough and it is promoted to a higher
+power tier permanently, which makes it stronger and more expensive to field.
+
+The front-end lives in `web/` and only draws the rules; every decision about
+what is legal, what a card is worth and what happens in combat comes from
+`src/`. It drives the engine through `playBattle`, the interactive generator:
+`next(instanceId)` deploys a card, `next(null)` ends the turn, and the events
+that come back are animated a frame at a time.
+
 ## Quick start
 
 Node 22.6+ is the only requirement. There are no runtime dependencies.
@@ -23,7 +45,7 @@ Node 22.6+ is the only requirement. There are no runtime dependencies.
 ```bash
 npm install          # only installs TypeScript and @types/node, for typechecking
 npm run demo         # the whole tour
-npm test             # 100 tests
+npm test             # 107 tests
 npm run balance      # archetype win-rate sweep
 ```
 
@@ -101,7 +123,8 @@ src/battle/     the engine, ability handlers, deployment controllers
 src/game/       collections, deck rules, XP rewards
 src/content/    the printed set: 28 creatures and 18 abilities
 src/cli/        the demo and the balance harness
-test/           100 tests
+web/            the browser front-end, built to one self-contained HTML file
+test/           107 tests
 ```
 
 `src/core` knows nothing about battles, and `src/battle` knows nothing about the specific cards — everything takes a `CardLibrary`, so tests run against three-card fixtures and the real game against the full roster.

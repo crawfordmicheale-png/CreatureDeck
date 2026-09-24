@@ -176,3 +176,93 @@ export interface BattleApi {
   opponentOf(playerId: string): string;
   log(event: Omit<BattleEvent, 'round'>): void;
 }
+
+// --------------------------------------------------------------- interactive
+
+/**
+ * A flat, serialisable picture of the board at one moment — everything a
+ * front-end needs to draw a frame, with no live engine objects in it.
+ */
+export interface CombatantSnapshot {
+  readonly uid: string;
+  readonly instanceId: string;
+  readonly ownerId: string;
+  readonly name: string;
+  readonly slot: number;
+  readonly health: number;
+  readonly maxHealth: number;
+  readonly shield: number;
+  readonly might: number;
+  readonly speed: number;
+  readonly guard: number;
+  readonly poison: number;
+  readonly alive: boolean;
+  readonly justDeployed: boolean;
+  readonly level: number;
+  readonly rarity: string;
+  readonly tier: string;
+  readonly tierLabel: string;
+  readonly abilities: readonly string[];
+}
+
+export interface PlayerSnapshot {
+  readonly id: string;
+  readonly name: string;
+  readonly nexusHealth: number;
+  readonly maxNexusHealth: number;
+  readonly energy: number;
+  readonly drawPileSize: number;
+  readonly hand: readonly ResolvedCardSnapshot[];
+  /** Fixed-length; null is an empty slot. */
+  readonly board: readonly (CombatantSnapshot | null)[];
+}
+
+export interface ResolvedCardSnapshot {
+  readonly instanceId: string;
+  readonly name: string;
+  readonly level: number;
+  readonly rarity: string;
+  readonly rarityLabel: string;
+  readonly tier: string;
+  readonly tierLabel: string;
+  readonly deployCost: number;
+  readonly powerScore: number;
+  readonly might: number;
+  readonly vitality: number;
+  readonly speed: number;
+  readonly guard: number;
+  readonly abilities: readonly { readonly name: string; readonly description: string }[];
+}
+
+export interface BattleSnapshot {
+  readonly round: number;
+  readonly players: readonly [PlayerSnapshot, PlayerSnapshot];
+}
+
+/**
+ * One pause point in an interactive battle.
+ *
+ * `deployment` waits for the player to name a card (or null to stop); the
+ * other kinds hand over the events that just happened so a front-end can
+ * animate them before the battle moves on.
+ */
+export type BattleStep =
+  | {
+      readonly kind: 'deployment';
+      readonly playerId: string;
+      readonly round: number;
+      readonly energy: number;
+      readonly freeSlots: number;
+      readonly playable: readonly ResolvedCardSnapshot[];
+      readonly events: readonly BattleEvent[];
+      readonly snapshot: BattleSnapshot;
+    }
+  | {
+      readonly kind: 'upkeep' | 'combat';
+      readonly round: number;
+      readonly events: readonly BattleEvent[];
+      readonly snapshot: BattleSnapshot;
+    };
+
+/** Reply to a `deployment` step: an instance id to play, or null to end the turn. */
+export type DeploymentReply = string | null | undefined;

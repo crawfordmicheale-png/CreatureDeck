@@ -28,12 +28,18 @@ import type {
   BattleEndReason,
   BattleEvent,
   BattleResult,
+  BattleSnapshot,
+  BattleStep,
   CardBattleStats,
   Combatant,
+  CombatantSnapshot,
   Controller,
   ControllerView,
   DamageKind,
+  DeploymentReply,
   PlayerBattleSummary,
+  PlayerSnapshot,
+  ResolvedCardSnapshot,
 } from './types.ts';
 import { DEFAULT_BATTLE_CONFIG } from './types.ts';
 
@@ -81,6 +87,8 @@ class Battle implements BattleApi {
   readonly events: BattleEvent[] = [];
   readonly combatants: Combatant[] = [];
   round = 0;
+  /** How much of `events` a front-end has already been handed. */
+  private drained = 0;
 
   constructor(
     setups: readonly [BattlePlayerSetup, BattlePlayerSetup],
@@ -353,44 +361,96 @@ class Battle implements BattleApi {
     return player.board.findIndex((slot) => slot === null);
   }
 
-  private deploymentPhase(player: PlayerState): void {
+  /** Energy is granted fresh each round; nothing carries over. */
+  private grantEnergy(player: PlayerState): void {
     player.energy = Math.min(
       this.config.maxEnergy,
       this.config.startingEnergy + (this.round - 1) * this.config.energyPerRound,
     );
+  }
 
+  private viewFor(player: PlayerState): ControllerView {
     const opponent = this.playerState(this.opponentOf(player.id));
-    const view: ControllerView = {
+    return {
       round: this.round,
       energy: player.energy,
       freeSlots: player.board.filter((slot) => slot === null).length,
-      hand: player.hand
-        .map((id) => player.cards.get(id))
-        .filter((card): card is ResolvedCard => card !== undefined),
+      hand: this.handOf(player),
       board: this.boardOf(player.id),
       enemyBoard: this.boardOf(opponent.id),
       nexusHealth: player.nexusHealth,
       enemyNexusHealth: opponent.nexusHealth,
       rng: player.rng,
     };
+  }
 
-    const played = new Set<string>();
-    for (const instanceId of player.controller.chooseDeployments(view)) {
-      if (played.has(instanceId)) continue;
-      const handIndex = player.hand.indexOf(instanceId);
-      if (handIndex === -1) continue;
+  private handOf(player: PlayerState): ResolvedCard[] {
+    return player.hand
+      .map((id) => player.cards.get(id))
+      .filter((card): card is ResolvedCard => card !== undefined);
+  }
 
-      const card = player.cards.get(instanceId);
-      if (!card) continue;
-      if (card.deployCost > player.energy) continue;
+  /**
+   * Puts one card from hand onto the board if it is affordable and there is
+   * room. Returns false, without complaint, when it is not — controllers and
+   * front-ends alike are allowed to ask for more than they can have.
+   */
+  private tryDeploy(player: PlayerState, instanceId: string): boolean {
+    const handIndex = player.hand.indexOf(instanceId);
+    if (handIndex === -1) return false;
 
-      const slot = this.freeSlot(player);
-      if (slot === -1) break;
+    const card = player.cards.get(instanceId);
+    if (!card || card.deployCost > player.energy) return false;
 
-      player.hand.splice(handIndex, 1);
-      player.energy -= card.deployCost;
-      played.add(instanceId);
-      this.deploy(player, card, slot);
+    const slot = this.freeSlot(player);
+    if (slot === -1) return false;
+
+    player.hand.splice(handIndex, 1);
+    player.energy -= card.deployCost;
+    this.deploy(player, card, slot);
+    return true;
+  }
+
+  private deploymentPhase(player: PlayerState): void {
+    this.grantEnergy(player);
+    for (const instanceId of player.controller.chooseDeployments(this.viewFor(player))) {
+      if (this.freeSlot(player) === -1) break;
+      this.tryDeploy(player, instanceId);
+    }
+  }
+
+  /**
+   * Deployment driven from outside: yields once per decision and deploys
+   * whatever comes back, until the caller replies with null.
+   */
+  private *interactiveDeployment(
+    player: PlayerState,
+  ): Generator<BattleStep, void, DeploymentReply> {
+    this.grantEnergy(player);
+
+    for (;;) {
+      const playable = this.handOf(player).filter(
+        (card) => card.deployCost <= player.energy,
+      );
+      const freeSlots = player.board.filter((slot) => slot === null).length;
+
+      // Nothing affordable, or nowhere to put it: the phase is over on its
+      // own. Without this the caller would be asked to decide forever.
+      if (playable.length === 0 || freeSlots === 0) return;
+
+      const reply = yield {
+        kind: 'deployment',
+        playerId: player.id,
+        round: this.round,
+        energy: player.energy,
+        freeSlots,
+        playable: playable.map(snapshotCard),
+        events: this.drain(),
+        snapshot: this.snapshot(),
+      };
+
+      if (reply === null || reply === undefined) return;
+      this.tryDeploy(player, reply);
     }
   }
 
@@ -546,9 +606,74 @@ class Battle implements BattleApi {
       .reduce((total, combatant) => total + combatant.health + combatant.might, 0);
   }
 
+  // ------------------------------------------------------------- front-ends
+
+  /** Events appended since the last drain, so a front-end can animate them. */
+  private drain(): readonly BattleEvent[] {
+    const fresh = this.events.slice(this.drained);
+    this.drained = this.events.length;
+    return fresh;
+  }
+
+  snapshot(): BattleSnapshot {
+    const [first, second] = this.players;
+    return {
+      round: this.round,
+      players: [this.snapshotPlayer(first), this.snapshotPlayer(second)],
+    };
+  }
+
+  private snapshotPlayer(player: PlayerState): PlayerSnapshot {
+    return {
+      id: player.id,
+      name: player.name,
+      nexusHealth: player.nexusHealth,
+      maxNexusHealth: this.config.nexusHealth,
+      energy: player.energy,
+      drawPileSize: player.drawPile.length,
+      hand: this.handOf(player).map(snapshotCard),
+      board: player.board.map((slot) => (slot ? this.snapshotCombatant(slot) : null)),
+    };
+  }
+
+  private snapshotCombatant(combatant: Combatant): CombatantSnapshot {
+    return {
+      uid: combatant.uid,
+      instanceId: combatant.card.instance.instanceId,
+      ownerId: combatant.ownerId,
+      name: combatant.card.displayName,
+      slot: combatant.slot,
+      health: combatant.health,
+      maxHealth: combatant.maxHealth,
+      shield: combatant.shield,
+      might: combatant.might,
+      speed: this.effectiveSpeed(combatant),
+      guard: this.effectiveGuard(combatant),
+      poison: combatant.poison,
+      alive: combatant.alive,
+      justDeployed: combatant.deployedRound === this.round,
+      level: combatant.card.level,
+      rarity: combatant.card.definition.rarity,
+      tier: combatant.card.powerTier,
+      tierLabel: combatant.card.tier.label,
+      abilities: combatant.abilities.map((ability) => ability.name),
+    };
+  }
+
   // -------------------------------------------------------------------- run
 
-  run(): BattleResult {
+  /**
+   * The round loop, as a generator.
+   *
+   * Players named in `interactive` are asked for each deployment through a
+   * yielded step instead of through their controller, which is what lets a
+   * front-end sit inside the loop without the engine knowing anything about it.
+   * `run()` drives this with nobody interactive, so the headless path is the
+   * same code.
+   */
+  *play(
+    interactive: ReadonlySet<string> = new Set<string>(),
+  ): Generator<BattleStep, BattleResult, DeploymentReply> {
     const [first, second] = this.players;
     this.log({
       type: 'battle-start',
@@ -574,10 +699,31 @@ class Battle implements BattleApi {
         break;
       }
 
-      for (const player of this.players) this.deploymentPhase(player);
+      if (interactive.size > 0) {
+        yield {
+          kind: 'upkeep',
+          round: this.round,
+          events: this.drain(),
+          snapshot: this.snapshot(),
+        };
+      }
+
+      for (const player of this.players) {
+        if (interactive.has(player.id)) yield* this.interactiveDeployment(player);
+        else this.deploymentPhase(player);
+      }
 
       this.combatPhase();
       this.cleanup();
+
+      if (interactive.size > 0) {
+        yield {
+          kind: 'combat',
+          round: this.round,
+          events: this.drain(),
+          snapshot: this.snapshot(),
+        };
+      }
 
       if (this.isOver()) {
         reason = 'nexus-destroyed';
@@ -663,10 +809,61 @@ class Battle implements BattleApi {
   }
 }
 
+/** Plays a battle out with nobody interactive. */
+function driveToCompletion(battle: Battle): BattleResult {
+  const generator = battle.play();
+  let step = generator.next();
+  while (!step.done) step = generator.next();
+  return step.value;
+}
+
 export function runBattle(
   setups: readonly [BattlePlayerSetup, BattlePlayerSetup],
   library: CardLibrary,
   config: Partial<BattleConfig> = {},
 ): BattleResult {
-  return new Battle(setups, library, { ...DEFAULT_BATTLE_CONFIG, ...config }).run();
+  return driveToCompletion(new Battle(setups, library, { ...DEFAULT_BATTLE_CONFIG, ...config }));
+}
+
+/** Flattens a resolved card into something a front-end can render directly. */
+function snapshotCard(card: ResolvedCard): ResolvedCardSnapshot {
+  return {
+    instanceId: card.instance.instanceId,
+    name: card.displayName,
+    level: card.level,
+    rarity: card.definition.rarity,
+    rarityLabel: card.rarity.label,
+    tier: card.powerTier,
+    tierLabel: card.tier.label,
+    deployCost: card.deployCost,
+    powerScore: card.powerScore,
+    might: card.stats.might,
+    vitality: card.stats.vitality,
+    speed: card.stats.speed,
+    guard: card.stats.guard,
+    abilities: card.abilities.map((ability) => ({
+      name: ability.name,
+      description: ability.description.replace(/\{(\w+)\}/g, (match, key: string) => {
+        const value = ability.params[key];
+        return value === undefined ? match : String(value);
+      }),
+    })),
+  };
+}
+
+/**
+ * Starts a battle a front-end drives.
+ *
+ * Call `.next()` to reach the first pause, then `.next(instanceId)` to deploy
+ * a card or `.next(null)` to end that player's deployment. When the generator
+ * finishes, its return value is the usual `BattleResult`.
+ */
+export function playBattle(
+  setups: readonly [BattlePlayerSetup, BattlePlayerSetup],
+  library: CardLibrary,
+  interactivePlayerIds: readonly string[],
+  config: Partial<BattleConfig> = {},
+): Generator<BattleStep, BattleResult, DeploymentReply> {
+  const battle = new Battle(setups, library, { ...DEFAULT_BATTLE_CONFIG, ...config });
+  return battle.play(new Set(interactivePlayerIds));
 }

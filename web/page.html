@@ -1,0 +1,143 @@
+<title>CreatureDeck</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Spectral:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>/*STYLES*/</style>
+
+<!-- ------------------------------------------------------------- title -->
+<section class="screen on" id="screen-title">
+  <div class="wrap title-card">
+    <div>
+      <p class="eyebrow">A deck-building battler</p>
+      <h1>Every copy starts the same.<br>Yours won't stay that way.</h1>
+    </div>
+
+    <p class="lede">
+      Twelve creatures, none of them levelled. Win a battle and they earn growth points —
+      you decide which stats each one keeps. Push a card far enough and it is promoted to a
+      higher power tier for good, which makes it stronger and more expensive to field.
+      Five battles stand between you and the Hollow Crown.
+    </p>
+
+    <div class="rules">
+      <div>
+        <h3>Rarity is headroom</h3>
+        <p>Common through Mythic adds no stats. It sets how many levels and growth points a card will ever get.</p>
+      </div>
+      <div>
+        <h3>Tier is right now</h3>
+        <p>Weak, Normal, Elite, Legendary, Ascendant. Read off the card's power score, so levelling promotes it.</p>
+      </div>
+      <div>
+        <h3>Growth costs tempo</h3>
+        <p>A higher tier hits harder and costs more energy to deploy. Levelling everything is a real decision.</p>
+      </div>
+      <div>
+        <h3>Focus is yours</h3>
+        <p>Might, Vitality, Speed, Guard. A point is worth the same power score in any of them — the creature is what changes.</p>
+      </div>
+    </div>
+
+    <div class="actions">
+      <button class="primary" id="begin">Begin the run</button>
+      <span class="hint">Creatures can't attack the round they land. Front slots are hit first.</span>
+    </div>
+  </div>
+</section>
+
+<!-- ------------------------------------------------------------ battle -->
+<section class="screen" id="screen-battle">
+  <div class="battlebar">
+    <div class="wrap" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;width:100%">
+      <span class="stage" id="stage-name">—</span>
+      <span class="hint num" id="stage-count"></span>
+      <span class="spacer"></span>
+      <span class="hint num" id="round-no">Round 1</span>
+      <button id="fast">Speed: normal</button>
+    </div>
+  </div>
+
+  <div class="wrap">
+    <div class="side">
+      <div class="side-label">
+        <span>Enemy</span>
+        <span class="nexus foe" id="foe-nexus">
+          <span class="pip"></span>nexus <b id="foe-hp">40</b>
+          <span class="hpbar"><i id="foe-bar" style="width:100%"></i></span>
+        </span>
+      </div>
+      <div class="board" id="foe-board"></div>
+    </div>
+
+    <div class="log" id="log" aria-live="polite"></div>
+
+    <div class="side">
+      <div class="side-label">
+        <span>Your board</span>
+        <span class="nexus you" id="you-nexus">
+          <span class="pip"></span>nexus <b id="you-hp">40</b>
+          <span class="hpbar"><i id="you-bar" style="width:100%"></i></span>
+        </span>
+      </div>
+      <div class="board" id="you-board"></div>
+    </div>
+  </div>
+
+  <div class="handbar">
+    <div class="wrap">
+      <div class="handhead">
+        <span class="energy">
+          <span class="pips" id="energy-pips"></span>
+          <span class="hint"><b class="num" id="energy-num">0</b> energy</span>
+        </span>
+        <span class="spacer" style="flex:1"></span>
+        <button class="primary" id="end-turn">End turn</button>
+      </div>
+      <div class="hand" id="hand"></div>
+    </div>
+  </div>
+</section>
+
+<!-- ----------------------------------------------------------- levelup -->
+<section class="screen" id="screen-levelup">
+  <div class="ptsbar">
+    <div class="wrap" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;width:100%">
+      <strong id="points-left">—</strong>
+      <span class="spacer" style="flex:1"></span>
+      <button class="primary" id="next-battle">Next battle</button>
+    </div>
+  </div>
+
+  <div class="wrap levelup">
+    <h2 id="levelup-head">Victory</h2>
+    <p class="hint" id="levelup-sub"></p>
+
+    <div class="rules" style="margin-top:14px">
+      <div>
+        <h3 id="next-name">—</h3>
+        <p id="next-blurb"></p>
+      </div>
+    </div>
+
+    <div class="roster" id="roster"></div>
+  </div>
+</section>
+
+<!-- --------------------------------------------------------------- end -->
+<section class="screen" id="screen-end">
+  <div class="wrap outcome">
+    <div>
+      <p class="eyebrow">Run complete</p>
+      <h1 id="outcome-title">—</h1>
+    </div>
+    <p class="lede" id="outcome-sub"></p>
+    <div class="tally" id="tally"></div>
+    <p class="hint" id="outcome-rounds"></p>
+    <div class="actions">
+      <button class="primary" id="again">Run it again</button>
+      <span class="hint">A new run starts every card back at level 1.</span>
+    </div>
+  </div>
+</section>
+
+<script>/*SCRIPT*/</script>

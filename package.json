@@ -12,10 +12,12 @@
     "test": "node --experimental-strip-types --test --test-reporter=spec \"test/**/*.test.ts\"",
     "demo": "node --experimental-strip-types src/cli/demo.ts",
     "check": "npm run typecheck && npm test",
-    "balance": "node --experimental-strip-types src/cli/balance.ts"
+    "balance": "node --experimental-strip-types src/cli/balance.ts",
+    "build:web": "node web/build.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.20.3",
+    "esbuild": "^0.28.2",
     "typescript": "^5.9.3"
   }
 }
