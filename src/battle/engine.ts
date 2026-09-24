@@ -606,6 +606,26 @@ class Battle implements BattleApi {
       .reduce((total, combatant) => total + combatant.health + combatant.might, 0);
   }
 
+  /** Total damage this player's creatures dealt, as a last-resort tiebreak. */
+  private damageDealt(playerId: string): number {
+    return this.combatants
+      .filter((combatant) => combatant.ownerId === playerId)
+      .reduce((total, combatant) => total + combatant.damageDealt, 0);
+  }
+
+  /**
+   * Settles a battle that ended level: first on who still holds the board,
+   * then on who did more work. Only a dead-even result on both counts is a
+   * genuine draw.
+   */
+  private breakTie(aId: string, bId: string): string | null {
+    const byBoard = this.boardStrength(aId) - this.boardStrength(bId);
+    if (byBoard !== 0) return byBoard > 0 ? aId : bId;
+    const byDamage = this.damageDealt(aId) - this.damageDealt(bId);
+    if (byDamage !== 0) return byDamage > 0 ? aId : bId;
+    return null;
+  }
+
   // ------------------------------------------------------------- front-ends
 
   /** Events appended since the last drain, so a front-end can animate them. */
@@ -738,7 +758,11 @@ class Battle implements BattleApi {
 
     let winner: string | null;
     if (aDead && bDead) {
-      winner = null;
+      // Both nexuses fell in the same round. With equal-sized decks this is
+      // not a freak result: both players deck out on the same turn and take
+      // identical fatigue, so a long game would otherwise always be a draw.
+      // Break it the same way a round-limit tie is broken.
+      winner = this.breakTie(a.id, b.id);
       reason = 'mutual-destruction';
     } else if (aDead) {
       winner = b.id;
@@ -747,13 +771,7 @@ class Battle implements BattleApi {
     } else if (a.nexusHealth !== b.nexusHealth) {
       winner = a.nexusHealth > b.nexusHealth ? a.id : b.id;
     } else {
-      // Both nexuses survived on equal health — usually because fatigue bit
-      // both players identically. Fall back to who still holds the board, so
-      // a stalemate resolves in favour of the stronger position rather than
-      // being recorded as a draw.
-      const strengthA = this.boardStrength(a.id);
-      const strengthB = this.boardStrength(b.id);
-      winner = strengthA === strengthB ? null : strengthA > strengthB ? a.id : b.id;
+      winner = this.breakTie(a.id, b.id);
       if (winner !== null) reason = 'board-tiebreak';
     }
 

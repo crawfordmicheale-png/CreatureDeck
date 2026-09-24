@@ -27,8 +27,28 @@ import { STAT_KEYS, STAT_LABELS } from '../src/core/stats.ts';
 import type { StatKey } from '../src/core/stats.ts';
 import { Collection } from '../src/game/collection.ts';
 import { applyXpAwards, computeXpAwards } from '../src/game/rewards.ts';
+import type { XpRewardConfig } from '../src/game/rewards.ts';
 
 const library = STANDARD_LIBRARY;
+
+/**
+ * XP for a five-battle run.
+ *
+ * The library default is tuned for a long campaign; a run has only four
+ * level-up screens to take a card from level 1 to its cap (~4,900 XP for a
+ * common), so a run pays roughly fifteen times as much. Benched cards earn
+ * half, because a deck of twelve only ever fields five at a time and the
+ * roster would otherwise split into starters and dead weight.
+ */
+const RUN_REWARDS: XpRewardConfig = {
+  base: 420,
+  perRound: 30,
+  winMultiplier: 1.4,
+  perKill: 40,
+  damagePerXp: 2,
+  benchShare: 0.5,
+  survivalBonus: 60,
+};
 
 // ------------------------------------------------------------------- stages
 
@@ -48,40 +68,40 @@ const SWIFT: readonly StatKey[] = ['speed', 'might'];
 const STAGES: readonly Stage[] = [
   {
     name: 'The Scavenger Warren',
-    blurb: 'Vermin, fresh out of the dirt. Nothing here has ever been levelled.',
+    blurb: 'Vermin, barely blooded. Nothing here has been levelled much.',
     clever: false,
     deck: [
-      ['dusk-mite', 1, SWIFT], ['dusk-mite', 1, SWIFT], ['thicket-hare', 1, SWIFT],
-      ['thicket-hare', 1, SWIFT], ['pebble-grub', 1, TANK], ['pebble-grub', 1, TANK],
-      ['scrapfang-pup', 1, MIGHT], ['scrapfang-pup', 1, MIGHT], ['gale-sprite', 1, TANK],
-      ['tide-minnow', 1, BRUISER], ['ember-whelp', 1, MIGHT], ['ember-whelp', 1, MIGHT],
+      ['dusk-mite', 2, SWIFT], ['dusk-mite', 2, SWIFT], ['thicket-hare', 2, SWIFT],
+      ['thicket-hare', 1, SWIFT], ['pebble-grub', 2, TANK], ['pebble-grub', 1, TANK],
+      ['scrapfang-pup', 2, MIGHT], ['scrapfang-pup', 1, MIGHT], ['gale-sprite', 1, TANK],
+      ['tide-minnow', 2, BRUISER], ['ember-whelp', 2, MIGHT], ['ember-whelp', 1, MIGHT],
     ],
   },
   {
     name: 'Brackwater Raiders',
-    blurb: 'Blooded a few times. Their commons have started to promote.',
+    blurb: 'Properly blooded. Their commons have started to promote out of Weak.',
     clever: false,
     deck: [
-      ['tide-minnow', 5, BRUISER], ['tide-minnow', 5, BRUISER], ['reef-sentinel', 4, TANK],
+      ['tide-minnow', 5, BRUISER], ['tide-minnow', 5, BRUISER], ['reef-sentinel', 5, TANK],
       ['grave-moth', 5, SWIFT], ['grave-moth', 5, SWIFT], ['dusk-mite', 6, SWIFT],
-      ['scrapfang-pup', 6, MIGHT], ['ember-whelp', 6, MIGHT], ['pebble-grub', 6, TANK],
-      ['thicket-hare', 6, SWIFT], ['gale-sprite', 5, TANK], ['cinder-imp', 4, SWIFT],
+      ['scrapfang-pup', 6, MIGHT], ['ember-whelp', 6, MIGHT], ['pebble-grub', 5, TANK],
+      ['thicket-hare', 5, SWIFT], ['gale-sprite', 5, TANK], ['cinder-imp', 5, SWIFT],
     ],
   },
   {
     name: 'The Ashen Kennel',
-    blurb: 'Every beast here is maxed. Cheap cards, taken as far as they go.',
+    blurb: 'Cheap cards taken seriously. Every beast here is an Elite on a common frame.',
     clever: true,
     deck: [
-      ['ashfang-jackal', 11, MIGHT], ['ashfang-jackal', 11, MIGHT], ['cinder-imp', 11, SWIFT],
-      ['cinder-imp', 11, SWIFT], ['bramble-warden', 10, TANK], ['reef-sentinel', 10, TANK],
-      ['grave-moth', 10, SWIFT], ['ember-whelp', 10, MIGHT], ['scrapfang-pup', 10, BRUISER],
-      ['thicket-hare', 10, SWIFT], ['pebble-grub', 10, TANK], ['dusk-mite', 10, SWIFT],
+      ['ashfang-jackal', 5, MIGHT], ['ashfang-jackal', 5, MIGHT], ['cinder-imp', 5, SWIFT],
+      ['cinder-imp', 5, SWIFT], ['bramble-warden', 5, TANK], ['reef-sentinel', 5, TANK],
+      ['grave-moth', 5, SWIFT], ['ember-whelp', 5, MIGHT], ['scrapfang-pup', 5, BRUISER],
+      ['thicket-hare', 5, SWIFT], ['pebble-grub', 5, TANK], ['dusk-mite', 5, SWIFT],
     ],
   },
   {
     name: 'The Gilded Menagerie',
-    blurb: 'Rares and epics, straight out of the packs. Rarity with nothing behind it.',
+    blurb: 'Rares and epics straight out of the packs, never played. This is the one your levelling was for.',
     clever: true,
     deck: [
       ['stormcaller-roc', 1, MIGHT], ['stormcaller-roc', 1, MIGHT], ['magma-colossus', 1, TANK],
@@ -92,17 +112,18 @@ const STAGES: readonly Stage[] = [
   },
   {
     name: 'The Hollow Crown',
-    blurb: 'Levelled rares behind a mythic. This is what the whole system builds toward.',
+    blurb: 'A mythic and two levelled rares, behind a wall of seasoned commons.',
     clever: true,
     deck: [
-      ['thanatos-hollow-crown', 10, MIGHT], ['nightmare-stalker', 14, MIGHT],
-      ['abyssal-serpent', 13, BRUISER], ['magma-colossus', 12, TANK],
-      ['stormcaller-roc', 12, SWIFT], ['verdant-matriarch', 11, TANK],
-      ['ember-whelp', 1, MIGHT], ['thicket-hare', 1, SWIFT], ['dusk-mite', 1, SWIFT],
-      ['pebble-grub', 1, TANK], ['gale-sprite', 1, TANK], ['tide-minnow', 1, BRUISER],
+      ['thanatos-hollow-crown', 4, MIGHT], ['nightmare-stalker', 6, MIGHT],
+      ['abyssal-serpent', 6, BRUISER], ['ember-whelp', 6, MIGHT], ['thicket-hare', 6, SWIFT],
+      ['dusk-mite', 6, SWIFT], ['pebble-grub', 6, TANK], ['gale-sprite', 6, TANK],
+      ['tide-minnow', 6, BRUISER], ['scrapfang-pup', 6, BRUISER], ['cinder-imp', 6, SWIFT],
+      ['grave-moth', 6, SWIFT],
     ],
   },
 ];
+
 
 /** The roster the player starts a run with: twelve unlevelled cards. */
 const STARTER: ReadonlyArray<readonly [string, string]> = [
@@ -133,6 +154,7 @@ let run: RunState | null = null;
 let battle: Generator<BattleStep, BattleResult, DeploymentReply> | null = null;
 let awaiting = false;
 let fast = false;
+let helpDismissed = false;
 
 /** Board as the animation currently believes it to be, between snapshots. */
 let live: BattleSnapshot | null = null;
@@ -195,6 +217,11 @@ function startBattle(): void {
   const state = run;
   if (!state) return;
   const stage = STAGES[state.stage] as Stage;
+
+  // The rules are open for the first battle, then stay however it was left.
+  const panel = el('help');
+  panel.hidden = state.stage === 0 ? helpDismissed : true;
+  el('help-toggle').setAttribute('aria-expanded', String(!panel.hidden));
 
   el('stage-name').textContent = stage.name;
   el('stage-count').textContent = `Battle ${state.stage + 1} of ${STAGES.length}`;
@@ -317,6 +344,7 @@ function applyEvent(event: BattleEvent): void {
     float(event.targetUid, 'miss', 'miss');
   } else if (event.type === 'attack' && event.actorUid) {
     flash(event.actorUid, 'swing');
+    if (event.targetUid) flash(event.targetUid, 'targeted');
   } else if (event.type === 'death' && event.targetUid) {
     const unit = findUnit(event.targetUid) as { alive: boolean } | null;
     if (unit) unit.alive = false;
@@ -340,7 +368,8 @@ function float(uid: string, text: string, kind: string): void {
 }
 
 function logEvent(event: BattleEvent): void {
-  if (event.type === 'draw' || event.type === 'battle-start') return;
+  // 'attack' is always followed by the 'damage' line that says what it did.
+  if (event.type === 'draw' || event.type === 'battle-start' || event.type === 'attack') return;
   const log = el('log');
   const line = document.createElement('p');
   line.className = `ev-${event.type}`;
@@ -357,6 +386,7 @@ function unitHtml(unit: CombatantSnapshot | null): string {
   const pct = Math.max(0, Math.round((unit.health / Math.max(1, unit.maxHealth)) * 100));
   const hurt = unit.health * 2 <= unit.maxHealth ? ' hurt' : '';
   const sick = unit.justDeployed ? ' sick' : '';
+  const sickNote = unit.justDeployed ? '<div class="sicknote">ready next round</div>' : '';
   const extra = pendingFlash.get(unit.uid);
   pendingFlash.delete(unit.uid);
 
@@ -375,6 +405,7 @@ function unitHtml(unit: CombatantSnapshot | null): string {
       <div class="lv">L${unit.level} ${esc(unit.tierLabel)}</div>
       <div class="fill"></div>
       <div class="marks">${marks.join('')}</div>
+      ${sickNote}
       <div class="bar"><i style="width:${pct}%"></i></div>
       <div class="row">
         <span class="mt">${unit.might}</span>
@@ -383,21 +414,32 @@ function unitHtml(unit: CombatantSnapshot | null): string {
     </div>`;
 }
 
-function cardHtml(card: ResolvedCardSnapshot, affordable: boolean): string {
+function cardHtml(card: ResolvedCardSnapshot, playable: boolean, blocked: string): string {
   const ability = card.abilities[0];
+  const note = playable
+    ? ability
+      ? esc(ability.name)
+      : 'No ability'
+    : `<span class="why">${esc(blocked)}</span>`;
+
   return `
-    <button class="card${affordable ? ' playable' : ''}"
-            data-play="${esc(card.instanceId)}" ${affordable ? '' : 'disabled'}
-            style="border-top-color:${tierColor(card.tier)}">
+    <button class="card${playable ? ' playable' : ''}"
+            data-play="${esc(card.instanceId)}" ${playable ? '' : 'disabled'}
+            style="border-top-color:${tierColor(card.tier)}"
+            title="${esc(card.name)} — ${esc(card.rarityLabel)} ${esc(card.tierLabel)}, level ${
+              card.level
+            }. Costs ${card.deployCost} energy.${
+              ability ? ' ' + esc(ability.name) + ': ' + esc(ability.description) : ''
+            }">
       <span class="cost num">${card.deployCost}</span>
       <span class="nm">${esc(card.name)}</span>
       <span class="meta" style="color:${rarityColor(card.rarity)}">${esc(
         card.rarityLabel,
       )} · ${esc(card.tierLabel)} · L${card.level}</span>
-      <span class="stats"><span>${card.might} mt</span><span>${card.vitality} hp</span><span>${
+      <span class="stats"><span>${card.might} atk</span><span>${card.vitality} hp</span><span>${
         card.guard
-      } gd</span></span>
-      <span class="abil">${ability ? esc(ability.name) : '&nbsp;'}</span>
+      } def</span></span>
+      <span class="abil">${note}</span>
     </button>`;
 }
 
@@ -422,8 +464,19 @@ function render(): void {
   el('energy-num').textContent = String(energy);
 
   const playableIds = new Set((lastStep?.playable ?? []).map((card) => card.instanceId));
+  const boardFull = (lastStep?.freeSlots ?? 0) === 0;
   el('hand').innerHTML = me.hand
-    .map((card) => cardHtml(card, awaiting && playableIds.has(card.instanceId)))
+    .map((card) => {
+      const playable = awaiting && playableIds.has(card.instanceId);
+      const why = !awaiting
+        ? 'Resolving…'
+        : boardFull
+          ? 'Board full'
+          : card.deployCost > energy
+            ? `Needs ${card.deployCost} energy`
+            : '';
+      return cardHtml(card, playable, why);
+    })
     .join('');
 
   for (const item of pendingFloat.splice(0)) {
@@ -449,6 +502,16 @@ function renderControls(): void {
   const endTurn = el<HTMLButtonElement>('end-turn');
   endTurn.disabled = !awaiting;
   endTurn.textContent = awaiting ? 'End turn' : 'Resolving…';
+
+  const phase = el('phase');
+  const canPlay = awaiting && (lastStep?.playable.length ?? 0) > 0;
+  phase.classList.toggle('act', awaiting);
+  phase.classList.toggle('wait', !awaiting);
+  phase.textContent = !awaiting
+    ? 'Combat resolving…'
+    : canPlay
+      ? 'Your turn — play creatures, then End turn'
+      : 'Your turn — nothing playable, End turn';
 }
 
 // ------------------------------------------------------- post-battle growth
@@ -465,7 +528,7 @@ function finishBattle(result: BattleResult): void {
   const before = new Map<string, string>();
   for (const id of state.deckIds) before.set(id, state.collection.resolve(id).powerTier);
 
-  applyXpAwards(state.collection, computeXpAwards(result, 'p1'));
+  applyXpAwards(state.collection, computeXpAwards(result, 'p1', RUN_REWARDS));
   pendingAwards = state.deckIds.map((id) => ({
     instanceId: id,
     before: before.get(id) ?? 'weak',
@@ -676,6 +739,12 @@ function boot(): void {
   el('again').addEventListener('click', () => {
     run = newRun();
     startBattle();
+  });
+  el('help-toggle').addEventListener('click', () => {
+    const panel = el('help');
+    panel.hidden = !panel.hidden;
+    el('help-toggle').setAttribute('aria-expanded', String(!panel.hidden));
+    helpDismissed = panel.hidden;
   });
   el('fast').addEventListener('click', () => {
     fast = !fast;

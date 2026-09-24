@@ -53,11 +53,39 @@
       <span class="hint num" id="stage-count"></span>
       <span class="spacer"></span>
       <span class="hint num" id="round-no">Round 1</span>
+      <button id="help-toggle" aria-expanded="false">How to play</button>
       <button id="fast">Speed: normal</button>
     </div>
   </div>
 
   <div class="wrap">
+    <div class="help" id="help" hidden>
+      <div>
+        <h3>Your only choice is what to deploy</h3>
+        <p>Click a card to put it on the board. Combat after that is automatic — you do not pick targets.</p>
+      </div>
+      <div>
+        <h3>Energy refills every round</h3>
+        <p>It starts at 3 and grows by 2 each round. Nothing carries over, so spend it.</p>
+      </div>
+      <div>
+        <h3>New creatures can't attack</h3>
+        <p>A creature sits out the round it lands. It fights from the next round on.</p>
+      </div>
+      <div>
+        <h3>Attacks hit the leftmost enemy</h3>
+        <p>Fastest creature acts first. If the enemy board is empty, attacks hit their nexus instead.</p>
+      </div>
+      <div>
+        <h3>Reduce their nexus to zero</h3>
+        <p>Both sides start at 40. Run out of cards and you take mounting damage each round, so games do end.</p>
+      </div>
+      <div>
+        <h3>Tiers are earned, not printed</h3>
+        <p>Levelling raises a card's power score. Cross a threshold and it promotes for good — stronger, but costlier to deploy.</p>
+      </div>
+    </div>
+
     <div class="side">
       <div class="side-label">
         <span>Enemy</span>
@@ -86,6 +114,7 @@
   <div class="handbar">
     <div class="wrap">
       <div class="handhead">
+        <span class="phase" id="phase">Your turn</span>
         <span class="energy">
           <span class="pips" id="energy-pips"></span>
           <span class="hint"><b class="num" id="energy-num">0</b> energy</span>
@@ -111,6 +140,11 @@
   <div class="wrap levelup">
     <h2 id="levelup-head">Victory</h2>
     <p class="hint" id="levelup-sub"></p>
+    <p class="hint">
+      Every point is worth the same power score in any stat — there is no wrong
+      answer, only a different creature. Might kills faster; Vitality and Guard
+      outlast; Speed strikes first and dodges.
+    </p>
 
     <div class="rules" style="margin-top:14px">
       <div>
