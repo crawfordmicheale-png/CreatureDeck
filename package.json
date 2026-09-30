@@ -13,7 +13,8 @@
     "demo": "node --experimental-strip-types src/cli/demo.ts",
     "check": "npm run typecheck && npm test",
     "balance": "node --experimental-strip-types src/cli/balance.ts",
-    "build:web": "node web/build.mjs"
+    "build:web": "node web/make-art.mjs && node web/build.mjs",
+    "art": "node web/make-art.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.20.3",

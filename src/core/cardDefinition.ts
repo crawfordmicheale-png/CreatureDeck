@@ -42,6 +42,27 @@ export interface CardDefinition {
   readonly flavor: string;
 }
 
+/**
+ * How many times a creature can act before it is spent and goes to the
+ * discard pile.
+ *
+ * Deliberately inverse to rarity: a common cycles through more attacks than a
+ * mythic does. Big cards hit harder but leave the board sooner, which is what
+ * stops a deck of bombs from simply outlasting a cheap one.
+ */
+export const BASE_STAMINA: Record<Rarity, number> = {
+  common: 3,
+  uncommon: 3,
+  rare: 2,
+  epic: 2,
+  mythic: 2,
+};
+
+/** Extra stamina earned by levelling, on top of the printed value. */
+export function staminaFor(rarity: Rarity, level: number): number {
+  return BASE_STAMINA[rarity] + (level >= 8 ? 1 : 0) + (level >= 16 ? 1 : 0);
+}
+
 export function defineCard(definition: {
   id: string;
   name: string;

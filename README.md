@@ -18,9 +18,24 @@ Same printed card. Same power tier, same energy cost, near-identical power score
 
 ## Play it
 
+**The Hollow Crown** is a tactical duel. You hold three cards. You choose what
+comes down, which creature swings, and what it swings at.
+
+- **Stamina.** Every attack spends one. At zero the creature is spent and goes
+  to the discard pile, so a board is a clock rather than a wall. A common has
+  more uses than a mythic: big cards hit harder and leave sooner.
+- **Lanes.** Slot one faces slot one. Attack any enemy creature you like, but
+  strike the nexus only through a lane with nothing facing your attacker.
+- **Effect cards.** Ten one-shot spells that spend the energy a creature would
+  have cost, so holding one is a real decision.
+- **Levelling.** Between duels your creatures earn growth points and you choose
+  the stats. Push a card far enough and it promotes a power tier for good.
+
+Five duels stand between the starting warband and the Hollow Crown.
+
 ```bash
 npm install
-npm run build:web      # bundles the engine + UI into web/dist/index.html
+npm run build:web      # inlines the art, then bundles engine + UI into web/dist/index.html
 ```
 
 Open `web/dist/index.html` in a browser. It is one self-contained file with no
@@ -32,11 +47,11 @@ your cards earn XP and growth points, and you decide — per card, per stat —
 where those points go. Push a card far enough and it is promoted to a higher
 power tier permanently, which makes it stronger and more expensive to field.
 
-The front-end lives in `web/` and only draws the rules; every decision about
-what is legal, what a card is worth and what happens in combat comes from
-`src/`. It drives the engine through `playBattle`, the interactive generator:
-`next(instanceId)` deploys a card, `next(null)` ends the turn, and the events
-that come back are animated a frame at a time.
+The front-end lives in `web/` and only draws the rules. It never decides what
+is legal: every button is built from the engine's own `legalActions`, which is
+the same list the AI picks from, so the two can never disagree. Card art is
+generated dark-fantasy illustration, inlined as WebP data URIs by `npm run art`
+so the page stays a single self-contained file.
 
 ## Quick start
 
@@ -45,7 +60,7 @@ Node 22.6+ is the only requirement. There are no runtime dependencies.
 ```bash
 npm install          # only installs TypeScript and @types/node, for typechecking
 npm run demo         # the whole tour
-npm test             # 107 tests
+npm test             # 130 tests
 npm run balance      # archetype win-rate sweep
 ```
 
@@ -118,13 +133,15 @@ Everything routes through a seeded RNG, so a battle replayed with the same decks
 
 ```
 src/core/       rarity, power tiers, stats, scoring, card definitions,
-                card instances, levelling — no battle logic at all
-src/battle/     the engine, ability handlers, deployment controllers
+                card instances, levelling — no combat logic at all
+src/duel/       the game: turn state machine, abilities, effects, opponent AI
 src/game/       collections, deck rules, XP rewards
-src/content/    the printed set: 28 creatures and 18 abilities
-src/cli/        the demo and the balance harness
-web/            the browser front-end, built to one self-contained HTML file
-test/           107 tests
+src/content/    the printed set: 28 creatures, 18 abilities, 10 effect cards
+src/battle/     legacy auto-resolver, kept only for the CLI demo and the
+                balance harness. Not part of the game and not exported.
+src/cli/        the demo and the balance harness (both on the legacy resolver)
+web/            the browser front-end and its art, built to one HTML file
+test/           130 tests
 ```
 
 `src/core` knows nothing about battles, and `src/battle` knows nothing about the specific cards — everything takes a `CardLibrary`, so tests run against three-card fixtures and the real game against the full roster.
@@ -144,6 +161,11 @@ Abilities are split deliberately: `src/core/abilities.ts` holds the metadata (na
 Mirror matches sitting near 50/50 is the load-bearing check — if a mirror skews, the engine favours whoever moves first, which is a bug rather than a balance question.
 
 ### Known balance findings
+
+Note that the harness below measures the **legacy auto-resolver**, not the duel
+the game now plays. Its findings are kept because the card economy is shared,
+but it is no longer a measurement of the real game.
+
 
 - **Spike is too strong.** "Three deeply levelled rares behind nine cost-1 bodies" beats every other archetype decisively. Cheap chaff is efficient enough at holding board slots that it fully funds the bombs, and the deck budget does not bind it (28 of 48). Not yet addressed.
 - **The AI is naive.** Both controllers are greedy one-round heuristics with no notion of holding a card back or trading, so archetype win rates should be read as a smell test, not a metagame.

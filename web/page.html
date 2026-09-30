@@ -1,125 +1,100 @@
-<title>CreatureDeck</title>
+<title>The Hollow Crown</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Spectral:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@600;700&family=Inter+Tight:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
 <style>/*STYLES*/</style>
 
-<!-- ------------------------------------------------------------- title -->
+<!-- -------------------------------------------------------------- title -->
 <section class="screen on" id="screen-title">
   <div class="wrap title-card">
-    <div>
-      <p class="eyebrow">A deck-building battler</p>
-      <h1>Every copy starts the same.<br>Yours won't stay that way.</h1>
+    <div class="title-head">
+      <p class="eyebrow">A deck-building duel</p>
+      <h1>Every copy starts the same.<br>Yours will not stay that way.</h1>
+      <p class="lede">
+        Ten creatures and six effects, none of them levelled. You hold three cards.
+        You choose what comes down, which creature swings, and what it swings at.
+        Every attack costs a creature stamina — spend the last of it and the card
+        is done, back to the discard pile for something fresh.
+      </p>
     </div>
-
-    <p class="lede">
-      Twelve creatures, none of them levelled. Win a battle and they earn growth points —
-      you decide which stats each one keeps. Push a card far enough and it is promoted to a
-      higher power tier for good, which makes it stronger and more expensive to field.
-      Five battles stand between you and the Hollow Crown.
-    </p>
 
     <div class="rules">
       <div>
-        <h3>Rarity is headroom</h3>
-        <p>Common through Mythic adds no stats. It sets how many levels and growth points a card will ever get.</p>
+        <h3>Three cards, always</h3>
+        <p>Your hand refills to three at the start of your turn. Spent and slain creatures cycle back through the deck.</p>
       </div>
       <div>
-        <h3>Tier is right now</h3>
-        <p>Weak, Normal, Elite, Legendary, Ascendant. Read off the card's power score, so levelling promotes it.</p>
+        <h3>Stamina is a clock</h3>
+        <p>Each attack spends one. A common has more uses than a mythic — big cards hit harder and leave sooner.</p>
       </div>
       <div>
-        <h3>Growth costs tempo</h3>
-        <p>A higher tier hits harder and costs more energy to deploy. Levelling everything is a real decision.</p>
+        <h3>Lanes open the nexus</h3>
+        <p>Attack any enemy creature you like. Strike the nexus only when the lane facing your attacker is empty.</p>
       </div>
       <div>
-        <h3>Focus is yours</h3>
-        <p>Might, Vitality, Speed, Guard. A point is worth the same power score in any of them — the creature is what changes.</p>
+        <h3>Levelling is yours to aim</h3>
+        <p>Win, and your creatures earn growth points. You choose the stats. Push far enough and a card promotes tier for good.</p>
       </div>
     </div>
 
     <div class="actions">
       <button class="primary" id="begin">Begin the run</button>
-      <span class="hint">Creatures can't attack the round they land. Front slots are hit first.</span>
+      <span class="hint">Five duels stand between you and the Hollow Crown.</span>
     </div>
   </div>
 </section>
 
-<!-- ------------------------------------------------------------ battle -->
-<section class="screen" id="screen-battle">
-  <div class="battlebar">
-    <div class="wrap" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;width:100%">
+<!-- --------------------------------------------------------------- duel -->
+<section class="screen" id="screen-duel">
+  <div class="topbar">
+    <div class="wrap bar-inner">
       <span class="stage" id="stage-name">—</span>
       <span class="hint num" id="stage-count"></span>
-      <span class="spacer"></span>
-      <span class="hint num" id="round-no">Round 1</span>
+      <span class="grow"></span>
+      <span class="hint num" id="turn-no">Round 1</span>
       <button id="help-toggle" aria-expanded="false">How to play</button>
       <button id="fast">Speed: normal</button>
     </div>
   </div>
 
-  <div class="wrap">
+  <div class="wrap field">
     <div class="help" id="help" hidden>
-      <div>
-        <h3>Your only choice is what to deploy</h3>
-        <p>Click a card to put it on the board. Combat after that is automatic — you do not pick targets.</p>
-      </div>
-      <div>
-        <h3>Energy refills every round</h3>
-        <p>It starts at 3 and grows by 2 each round. Nothing carries over, so spend it.</p>
-      </div>
-      <div>
-        <h3>New creatures can't attack</h3>
-        <p>A creature sits out the round it lands. It fights from the next round on.</p>
-      </div>
-      <div>
-        <h3>Attacks hit the leftmost enemy</h3>
-        <p>Fastest creature acts first. If the enemy board is empty, attacks hit their nexus instead.</p>
-      </div>
-      <div>
-        <h3>Reduce their nexus to zero</h3>
-        <p>Both sides start at 40. Run out of cards and you take mounting damage each round, so games do end.</p>
-      </div>
-      <div>
-        <h3>Tiers are earned, not printed</h3>
-        <p>Levelling raises a card's power score. Cross a threshold and it promotes for good — stronger, but costlier to deploy.</p>
-      </div>
+      <div><h3>Play a card</h3><p>Click a card in hand, then click one of your three lanes to place a creature. Effects ask for their target instead.</p></div>
+      <div><h3>Attack</h3><p>Click one of your ready creatures, then click an enemy. A creature cannot attack the turn it lands, and swings once per turn.</p></div>
+      <div><h3>Stamina</h3><p>The pips under a creature are its remaining uses. At zero it is spent and returns to your discard pile.</p></div>
+      <div><h3>The nexus</h3><p>Reduce the enemy nexus to zero. It can only be struck through a lane with no enemy creature facing your attacker.</p></div>
     </div>
 
-    <div class="side">
-      <div class="side-label">
-        <span>Enemy</span>
-        <span class="nexus foe" id="foe-nexus">
-          <span class="pip"></span>nexus <b id="foe-hp">40</b>
-          <span class="hpbar"><i id="foe-bar" style="width:100%"></i></span>
-        </span>
+    <div class="side foe">
+      <div class="nexus foe" id="foe-nexus" title="Enemy nexus">
+        <span class="crest"></span>
+        <span class="who">Enemy nexus</span>
+        <b class="num" id="foe-hp">30</b>
+        <span class="hpbar"><i id="foe-bar" style="width:100%"></i></span>
       </div>
-      <div class="board" id="foe-board"></div>
+      <div class="lanes" id="foe-lanes"></div>
     </div>
 
     <div class="log" id="log" aria-live="polite"></div>
 
-    <div class="side">
-      <div class="side-label">
-        <span>Your board</span>
-        <span class="nexus you" id="you-nexus">
-          <span class="pip"></span>nexus <b id="you-hp">40</b>
-          <span class="hpbar"><i id="you-bar" style="width:100%"></i></span>
-        </span>
+    <div class="side you">
+      <div class="lanes" id="you-lanes"></div>
+      <div class="nexus you" id="you-nexus" title="Your nexus">
+        <span class="crest"></span>
+        <span class="who">Your nexus</span>
+        <b class="num" id="you-hp">30</b>
+        <span class="hpbar"><i id="you-bar" style="width:100%"></i></span>
       </div>
-      <div class="board" id="you-board"></div>
     </div>
   </div>
 
   <div class="handbar">
     <div class="wrap">
       <div class="handhead">
-        <span class="phase" id="phase">Your turn</span>
-        <span class="energy">
-          <span class="pips" id="energy-pips"></span>
-          <span class="hint"><b class="num" id="energy-num">0</b> energy</span>
-        </span>
-        <span class="spacer" style="flex:1"></span>
+        <span class="prompt" id="prompt">Your turn</span>
+        <span class="grow"></span>
+        <span class="energy" title="Energy refills every round"><b class="num" id="energy">3</b> energy</span>
+        <span class="hint num" id="piles"></span>
         <button class="primary" id="end-turn">End turn</button>
       </div>
       <div class="hand" id="hand"></div>
@@ -127,13 +102,13 @@
   </div>
 </section>
 
-<!-- ----------------------------------------------------------- levelup -->
+<!-- ------------------------------------------------------------ levelup -->
 <section class="screen" id="screen-levelup">
-  <div class="ptsbar">
-    <div class="wrap" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;width:100%">
+  <div class="topbar">
+    <div class="wrap bar-inner">
       <strong id="points-left">—</strong>
-      <span class="spacer" style="flex:1"></span>
-      <button class="primary" id="next-battle">Next battle</button>
+      <span class="grow"></span>
+      <button class="primary" id="next-duel">Next duel</button>
     </div>
   </div>
 
@@ -141,23 +116,20 @@
     <h2 id="levelup-head">Victory</h2>
     <p class="hint" id="levelup-sub"></p>
     <p class="hint">
-      Every point is worth the same power score in any stat — there is no wrong
-      answer, only a different creature. Might kills faster; Vitality and Guard
-      outlast; Speed strikes first and dodges.
+      A growth point is worth the same power score in any stat, so there is no wrong
+      answer — only a different creature. Might kills faster. Vitality and Guard outlast.
+      Speed slips blows.
     </p>
 
-    <div class="rules" style="margin-top:14px">
-      <div>
-        <h3 id="next-name">—</h3>
-        <p id="next-blurb"></p>
-      </div>
+    <div class="rules next">
+      <div><h3 id="next-name">—</h3><p id="next-blurb"></p></div>
     </div>
 
     <div class="roster" id="roster"></div>
   </div>
 </section>
 
-<!-- --------------------------------------------------------------- end -->
+<!-- ---------------------------------------------------------------- end -->
 <section class="screen" id="screen-end">
   <div class="wrap outcome">
     <div>
@@ -166,10 +138,10 @@
     </div>
     <p class="lede" id="outcome-sub"></p>
     <div class="tally" id="tally"></div>
-    <p class="hint" id="outcome-rounds"></p>
+    <p class="hint" id="outcome-turns"></p>
     <div class="actions">
       <button class="primary" id="again">Run it again</button>
-      <span class="hint">A new run starts every card back at level 1.</span>
+      <span class="hint">A new run starts every creature back at level 1.</span>
     </div>
   </div>
 </section>
