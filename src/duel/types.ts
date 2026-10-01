@@ -36,9 +36,9 @@ export const DEFAULT_DUEL_CONFIG: DuelConfig = {
   nexusHealth: 30,
   lanes: 3,
   handSize: 3,
-  startingEnergy: 3,
+  startingEnergy: 4,
   energyPerRound: 2,
-  maxEnergy: 12,
+  maxEnergy: 14,
   maxTurns: 60,
 };
 

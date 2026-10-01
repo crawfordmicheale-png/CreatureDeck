@@ -68,7 +68,7 @@ Node 22.6+ is the only requirement. There are no runtime dependencies.
 ```bash
 npm install          # only installs TypeScript and @types/node, for typechecking
 npm run demo         # the whole tour
-npm test             # 149 tests
+npm test             # 116 tests
 npm run balance      # archetype win-rate sweep
 ```
 
@@ -144,40 +144,54 @@ src/core/       rarity, power tiers, stats, scoring, card definitions,
                 card instances, levelling, upgrade paths — no combat logic
 src/duel/       the game: turn state machine, abilities, effects, opponent AI
 src/game/       collections, deck rules, XP rewards, drafting
-src/content/    the printed set: 28 creatures, 18 abilities, 10 effect cards
-src/battle/     legacy auto-resolver, kept only for the CLI demo and the
-                balance harness. Not part of the game and not exported.
-src/cli/        the demo and the balance harness (both on the legacy resolver)
+src/content/    the printed set and the campaign: creatures, abilities,
+                effect cards, the five stages and the progression curve
+src/cli/        the card tour and the balance harness
 web/            the browser front-end and its art, built to one HTML file
-test/           149 tests
+test/           116 tests
 ```
 
 `src/core` knows nothing about battles, and `src/battle` knows nothing about the specific cards — everything takes a `CardLibrary`, so tests run against three-card fixtures and the real game against the full roster.
 
 Abilities are split deliberately: `src/core/abilities.ts` holds the metadata (name, description, trigger, weight) and `src/battle/abilityHandlers.ts` holds the behaviour, keyed by the same id. Tooling can price and describe an ability without loading the combat engine, and a test asserts the two halves never drift apart.
 
+Runs are saved to the browser as you go, so closing the tab does not lose
+one. A duel in progress restarts from the top; everything between duels — your
+roster, its levels, upgrades and deck — is kept.
+
 ## Balance
 
-`npm run balance` plays a round-robin between four deck archetypes over many deterministic seeds and flags anything suspicious:
+`npm run balance` plays whole runs of the shipped campaign with the AI on both
+sides — drafting, levelling and upgrade forks included — and reports how far
+they get against a target curve:
 
 ```
-  Veteran     vs Veteran       48 - 49    53 draws   avg 16.1 rounds
-  Veteran     vs Collector    142 - 6      2 draws   avg 12.2 rounds  <- lopsided
-  Veteran     vs Spike          6 - 109   35 draws   avg 14.8 rounds  <- lopsided
+  1 The Scavenger Warren     reached  200 won  67% (target 80%)  14 turns  deck 13  14pt too hard
+  2 Brackwater Raiders       reached  133 won  63% (target 70%)   9 turns  deck 14  on target
+  3 The Ashen Kennel         reached   84 won  63% (target 60%)   6 turns  deck 15  on target
+  4 The Gilded Menagerie     reached   53 won  62% (target 60%)   4 turns  deck 16  on target
+  5 The Hollow Crown         reached   33 won  55% (target 45%)   4 turns  deck 17  on target
+  full clears 18/200 (9%)
 ```
 
-Mirror matches sitting near 50/50 is the load-bearing check — if a mirror skews, the engine favours whoever moves first, which is a bug rather than a balance question.
+The campaign it measures lives in `src/content/campaign.ts`, not in the
+front-end, so the harness and the game cannot drift apart. It reports three
+development styles, because a curve that only works for one way of spending
+growth points is not balanced.
 
 ### Known balance findings
 
-Note that the harness below measures the **legacy auto-resolver**, not the duel
-the game now plays. Its findings are kept because the card economy is shared,
-but it is no longer a measurement of the real game.
-
-
-- **Spike is too strong.** "Three deeply levelled rares behind nine cost-1 bodies" beats every other archetype decisively. Cheap chaff is efficient enough at holding board slots that it fully funds the bombs, and the deck budget does not bind it (28 of 48). Not yet addressed.
-- **The AI is naive.** Both controllers are greedy one-round heuristics with no notion of holding a card back or trading, so archetype win rates should be read as a smell test, not a metagame.
-- **Draws are common in mirrors** even with the board-strength tiebreak, because symmetric decks take symmetric fatigue.
+- **Defence is not a viable style.** The aggressive build clears about a third
+  of runs; the defensive build clears none, and stalls completely by duel four.
+  Stamina is the cause: creatures expire after a few attacks, so there is no
+  way to win by outlasting an opponent, and points spent on Vitality and Guard
+  buy time the creature does not live to use. Fixing this needs a way to
+  recover stamina — a "brace" action that trades an attack for a use and some
+  Guard would give defensive play a win condition it currently lacks.
+- **The opening duel is ~14 points harder than intended** and the longest in
+  the run at 14 turns. Everything after it is on target.
+- **The AI is a one-turn heuristic.** It never holds a card back and does not
+  plan a curve, so these numbers are a floor rather than a ceiling.
 
 ## Extending it
 

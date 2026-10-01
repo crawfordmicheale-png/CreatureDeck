@@ -10,7 +10,7 @@ import { RUTHLESS, STEADY, chooseAction, playTurn } from '../src/duel/ai.ts';
 import { Duel } from '../src/duel/engine.ts';
 import { EFFECT_HANDLERS } from '../src/duel/effects.ts';
 import type { DeckEntry, DuelPlayerSetup } from '../src/duel/types.ts';
-import { NEXUS_TARGET } from '../src/duel/types.ts';
+import { DEFAULT_DUEL_CONFIG, NEXUS_TARGET } from '../src/duel/types.ts';
 
 const library = STANDARD_LIBRARY;
 
@@ -80,7 +80,7 @@ describe('duel setup', () => {
     const snapshot = duel.snapshot();
     const me = snapshot.players[0];
     assert.equal(me.hand.length, 3);
-    assert.equal(me.energy, 3);
+    assert.equal(me.energy, DEFAULT_DUEL_CONFIG.startingEnergy);
     assert.equal(snapshot.activePlayerId, 'p1');
     assert.equal(me.lanes.length, 3);
     assert.ok(me.lanes.every((lane) => lane === null));
@@ -161,7 +161,7 @@ describe('stamina', () => {
   });
 
   it('spends one per attack and retires the creature at zero', () => {
-    const { duel } = build(['ember-whelp', ...FILLER], FILLER);
+    const { duel } = build(['ember-whelp', ...FILLER], []);
     playAnyCreature(duel);
 
     const uid = duel.snapshot().players[0].lanes.find((lane) => lane !== null)?.uid;
@@ -171,17 +171,21 @@ describe('stamina', () => {
     assert.ok(unit);
     const max = unit.maxStamina;
 
+    // Swing at the nexus rather than at creatures: the point is stamina, and
+    // trading blows would let the attacker die before it is spent.
     let attacks = 0;
-    for (let i = 0; i < 20 && duel.findUnit(uid); i += 1) {
+    for (let i = 0; i < 24 && duel.findUnit(uid); i += 1) {
       const attack = duel
         .legalActions()
-        .find((a) => a.type === 'attack' && a.attackerUid === uid);
+        .find(
+          (a) => a.type === 'attack' && a.attackerUid === uid && a.targetUid === NEXUS_TARGET,
+        );
       if (attack) {
         duel.apply(attack);
         attacks += 1;
       } else {
         duel.apply({ type: 'end-turn' });
-        playTurn(duel, STEADY);
+        duel.apply({ type: 'end-turn' });
       }
       if (duel.isOver) break;
     }

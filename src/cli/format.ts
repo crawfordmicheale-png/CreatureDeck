@@ -1,6 +1,6 @@
 /** Terminal rendering helpers for cards, decks and battle logs. */
 
-import type { BattleEvent } from '../battle/types.ts';
+import type { DuelEvent } from '../duel/types.ts';
 import type { ResolvedCard } from '../core/cardInstance.ts';
 import { xpToNextLevel } from '../core/leveling.ts';
 import { STAT_KEYS, STAT_LABELS } from '../core/stats.ts';
@@ -132,27 +132,28 @@ export function formatCardRow(card: ResolvedCard): string {
   ].join('  ');
 }
 
-const EVENT_STYLE: Partial<Record<BattleEvent['type'], string>> = {
-  'round-start': 'bold',
-  deploy: 'cyan',
+const EVENT_STYLE: Partial<Record<DuelEvent['type'], string>> = {
+  'turn-start': 'bold',
+  'play-creature': 'cyan',
+  'play-effect': 'magenta',
   ability: 'magenta',
   death: 'red',
   revive: 'green',
   heal: 'green',
   'nexus-damage': 'yellow',
-  'battle-end': 'bold',
+  'duel-end': 'bold',
   dodge: 'dim',
 };
 
-export function formatEvent(event: BattleEvent): string {
+export function formatEvent(event: DuelEvent): string {
   const style = EVENT_STYLE[event.type];
-  const text = event.type === 'round-start' ? `\n${event.message}` : `  ${event.message}`;
+  const text = event.type === 'turn-start' ? `\n${event.message}` : `  ${event.message}`;
   return style ? paint(text, style) : text;
 }
 
 /** Battle logs are verbose; this trims the blow-by-blow unless asked for it. */
-export function formatLog(log: readonly BattleEvent[], options: { verbose?: boolean } = {}): string {
-  const noisy = new Set<BattleEvent['type']>(['draw', 'damage', 'attack', 'dodge']);
+export function formatLog(log: readonly DuelEvent[], options: { verbose?: boolean } = {}): string {
+  const noisy = new Set<DuelEvent['type']>(['draw', 'damage', 'attack', 'dodge', 'stamina']);
   return log
     .filter((event) => options.verbose === true || !noisy.has(event.type))
     .map(formatEvent)

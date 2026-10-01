@@ -17,16 +17,14 @@ import { createCardInstance, resolveCard } from '../src/core/cardInstance.ts';
 import { nextPowerTier, powerTierProfile } from '../src/core/powerTier.ts';
 import { rarityProfile } from '../src/core/rarity.ts';
 import { createRng, seedFromString } from '../src/core/rng.ts';
-import type { Rng } from '../src/core/rng.ts';
 import { effectText } from '../src/core/effects.ts';
 import { STAT_KEYS, STAT_LABELS } from '../src/core/stats.ts';
 import type { StatKey } from '../src/core/stats.ts';
 import { Collection } from '../src/game/collection.ts';
 import { optionId, rollDraft } from '../src/game/draft.ts';
 import type { DraftOption } from '../src/game/draft.ts';
-import { applyXpAwards } from '../src/game/rewards.ts';
-import type { XpAward } from '../src/game/rewards.ts';
-import { STEADY, RUTHLESS, chooseAction } from '../src/duel/ai.ts';
+import { applyXpAwards, computeDuelXp } from '../src/game/rewards.ts';
+import { CAUTIOUS, RUTHLESS, STEADY, chooseAction } from '../src/duel/ai.ts';
 import type { AiProfile } from '../src/duel/ai.ts';
 import { Duel } from '../src/duel/engine.ts';
 import type {
@@ -55,110 +53,21 @@ function art(id: string): string {
 
 // ------------------------------------------------------------------- content
 
-const MIGHT: readonly StatKey[] = ['might'];
-const BRUISER: readonly StatKey[] = ['might', 'vitality'];
-const TANK: readonly StatKey[] = ['vitality', 'guard'];
-const SWIFT: readonly StatKey[] = ['speed', 'might'];
+import {
+  MIN_CREATURES,
+  MIN_DECK,
+  STAGES,
+  STARTER_EFFECTS,
+  STARTER_ROSTER,
+} from '../src/content/campaign.ts';
+import type { AiProfileName, Stage } from '../src/content/campaign.ts';
 
-interface Stage {
-  readonly name: string;
-  readonly blurb: string;
-  readonly creatures: ReadonlyArray<readonly [string, number, readonly StatKey[]]>;
-  readonly effects: readonly string[];
-  readonly profile: AiProfile;
-}
-
-const STAGES: readonly Stage[] = [
-  {
-    name: 'The Scavenger Warren',
-    blurb: 'Vermin from the under-dark. Barely blooded, and they know it.',
-    profile: STEADY,
-    creatures: [
-      ['dusk-mite', 2, SWIFT], ['dusk-mite', 1, SWIFT], ['thicket-hare', 2, SWIFT],
-      ['pebble-grub', 2, TANK], ['scrapfang-pup', 2, MIGHT], ['ember-whelp', 1, MIGHT],
-      ['gale-sprite', 1, TANK], ['tide-minnow', 2, BRUISER],
-    ],
-    effects: ['emberlash', 'grave-draught'],
-  },
-  {
-    name: 'Brackwater Raiders',
-    blurb: 'Drowned-coast reavers. Their commons have promoted out of Weak.',
-    profile: STEADY,
-    creatures: [
-      ['tide-minnow', 5, BRUISER], ['reef-sentinel', 5, TANK], ['grave-moth', 5, SWIFT],
-      ['dusk-mite', 6, SWIFT], ['scrapfang-pup', 5, MIGHT], ['ember-whelp', 5, MIGHT],
-      ['pebble-grub', 5, TANK], ['cinder-imp', 5, SWIFT],
-    ],
-    effects: ['emberlash', 'shroud-of-ash', 'bonecage'],
-  },
-  {
-    name: 'The Ashen Kennel',
-    blurb: 'Cheap cards taken seriously. Every beast here is an Elite on a common frame.',
-    profile: RUTHLESS,
-    creatures: [
-      ['ashfang-jackal', 6, MIGHT], ['ashfang-jackal', 6, MIGHT], ['cinder-imp', 6, SWIFT],
-      ['bramble-warden', 6, TANK], ['reef-sentinel', 6, TANK], ['grave-moth', 6, SWIFT],
-      ['ember-whelp', 6, MIGHT], ['thicket-hare', 6, SWIFT],
-    ],
-    effects: ['emberlash', 'whetstone-rite', 'cinderbloom'],
-  },
-  {
-    name: 'The Gilded Menagerie',
-    blurb: 'Rares and epics straight out of the packs, never played. This is what your levelling was for.',
-    profile: RUTHLESS,
-    creatures: [
-      ['stormcaller-roc', 1, MIGHT], ['magma-colossus', 1, TANK], ['abyssal-serpent', 1, BRUISER],
-      ['verdant-matriarch', 1, TANK], ['nightmare-stalker', 1, MIGHT], ['pyreclaw-tyrant', 1, MIGHT],
-      ['glacierheart-titan', 1, TANK], ['skyfather-drake', 1, BRUISER],
-    ],
-    effects: ['ruinous-bolt', 'grave-draught', 'second-wind'],
-  },
-  {
-    name: 'The Hollow Crown',
-    blurb: 'A mythic and two levelled rares, behind a wall of seasoned commons.',
-    profile: RUTHLESS,
-    creatures: [
-      ['thanatos-hollow-crown', 4, MIGHT], ['nightmare-stalker', 6, MIGHT],
-      ['abyssal-serpent', 6, BRUISER], ['ember-whelp', 6, MIGHT], ['dusk-mite', 6, SWIFT],
-      ['pebble-grub', 6, TANK], ['tide-minnow', 6, BRUISER], ['cinder-imp', 6, SWIFT],
-    ],
-    effects: ['cinderbloom', 'ruinous-bolt', 'bonecage', 'shroud-of-ash'],
-  },
-];
-
-/** The roster a run begins with. */
-const STARTER: ReadonlyArray<readonly [string, string]> = [
-  ['ember-whelp', 'Cinderbite'],
-  ['scrapfang-pup', 'Gnash'],
-  ['thicket-hare', 'Flicker'],
-  ['pebble-grub', 'Old Scar'],
-  ['tide-minnow', 'Brine'],
-  ['dusk-mite', 'Whisper'],
-  ['gale-sprite', 'Zephyr'],
-  ['ashfang-jackal', 'Ashfang'],
-  ['cinder-imp', 'Ember'],
-  ['reef-sentinel', 'Bulwark'],
-];
-
-const STARTER_EFFECTS: readonly string[] = [
-  'emberlash',
-  'emberlash',
-  'grave-draught',
-  'whetstone-rite',
-  'shroud-of-ash',
-  'hollow-pact',
-];
-
-/**
- * XP for a run.
- *
- * Scaled by how far in the duel is, because levels get steeply more expensive
- * — a flat award dumps a card from level 1 to 6 in the opening duel and leaves
- * the later level-up screens with nothing to spend. This curve lands a common
- * at roughly level 4, 6, 8 and 10 across the four screens, which is one
- * upgrade fork early and one late.
- */
-const RUN_XP = { base: 420, winMultiplier: 1.3 };
+/** The campaign names a profile; this maps it to the opponent's policy. */
+const AI_PROFILES: Record<AiProfileName, AiProfile> = {
+  cautious: CAUTIOUS,
+  steady: STEADY,
+  ruthless: RUTHLESS,
+};
 
 // --------------------------------------------------------------------- state
 
@@ -170,11 +79,10 @@ interface RunState {
   /** Effect card ids in the deck; duplicates are allowed. */
   effects: string[];
   wins: number;
-  rng: Rng;
+  /** Drafts derive their randomness from this plus the stage, so a saved run
+   *  can be restored without serialising a generator. */
+  seed: number;
 }
-
-/** A deck may never be cut below this. */
-const MIN_DECK = 12;
 
 let run: RunState | null = null;
 let duel: Duel | null = null;
@@ -183,6 +91,117 @@ let selectedUid: string | null = null;
 let pendingEffect: HandSnapshot | null = null;
 let busy = false;
 let helpDismissed = false;
+
+const SAVE_KEY = 'creaturedeck.run.v1';
+
+interface SavedRun {
+  readonly version: 1;
+  readonly stage: number;
+  readonly wins: number;
+  readonly seed: number;
+  readonly effects: readonly string[];
+  readonly roster: readonly {
+    readonly instanceId: string;
+    readonly definitionId: string;
+    readonly level: number;
+    readonly xp: number;
+    readonly allocation: Record<string, number>;
+    readonly upgrades: readonly string[];
+    readonly nickname: string | null;
+    readonly battlesFought: number;
+  }[];
+}
+
+/**
+ * Persists the run between visits.
+ *
+ * Only what is between duels is saved — a duel in progress restarts, because
+ * serialising a live duel would mean versioning the whole engine state for
+ * very little gain. Every access is wrapped: storage can be unavailable or
+ * throw outright in a private window.
+ */
+function saveRun(): void {
+  const state = run;
+  if (!state) return;
+  try {
+    const payload: SavedRun = {
+      version: 1,
+      stage: state.stage,
+      wins: state.wins,
+      seed: state.seed,
+      effects: state.effects,
+      roster: state.roster.map((id) => {
+        const instance = state.collection.get(id);
+        return {
+          instanceId: instance.instanceId,
+          definitionId: instance.definitionId,
+          level: instance.level,
+          xp: instance.xp,
+          allocation: { ...instance.allocation },
+          upgrades: [...instance.upgrades],
+          nickname: instance.nickname,
+          battlesFought: instance.battlesFought,
+        };
+      }),
+    };
+    window.localStorage.setItem(SAVE_KEY, JSON.stringify(payload));
+  } catch {
+    // A run that cannot be saved is still perfectly playable.
+  }
+}
+
+function clearRun(): void {
+  try {
+    window.localStorage.removeItem(SAVE_KEY);
+  } catch {
+    /* nothing to do */
+  }
+}
+
+function loadRun(): RunState | null {
+  let payload: SavedRun;
+  try {
+    const raw = window.localStorage.getItem(SAVE_KEY);
+    if (!raw) return null;
+    payload = JSON.parse(raw) as SavedRun;
+  } catch {
+    return null;
+  }
+
+  if (payload?.version !== 1 || !Array.isArray(payload.roster) || payload.roster.length === 0) {
+    return null;
+  }
+
+  try {
+    const collection = new Collection(library);
+    const roster = payload.roster.map((saved) => {
+      // Throws on an unknown card, which a stale save can easily contain.
+      library.getCard(saved.definitionId);
+      return collection.add(saved.definitionId, {
+        instanceId: saved.instanceId,
+        level: saved.level,
+        xp: saved.xp,
+        allocation: saved.allocation,
+        upgrades: saved.upgrades,
+        nickname: saved.nickname,
+        battlesFought: saved.battlesFought,
+      }).instanceId;
+    });
+    const effects = payload.effects.filter((id) => EFFECTS.some((e) => e.id === id));
+
+    return {
+      stage: Math.max(0, Math.min(payload.stage, STAGES.length - 1)),
+      collection,
+      roster,
+      effects: [...effects],
+      wins: payload.wins ?? 0,
+      seed: payload.seed ?? 1,
+    };
+  } catch {
+    // A save written by an older set of cards: start fresh rather than crash.
+    return null;
+  }
+}
 
 function show(screen: string): void {
   for (const node of Array.from(document.querySelectorAll('.screen'))) {
@@ -195,7 +214,7 @@ function show(screen: string): void {
 
 function newRun(): RunState {
   const collection = new Collection(library);
-  const roster = STARTER.map(([definitionId, nickname]) =>
+  const roster = STARTER_ROSTER.map(([definitionId, nickname]) =>
     collection.add(definitionId, { nickname }).instanceId,
   );
   return {
@@ -204,7 +223,7 @@ function newRun(): RunState {
     roster,
     effects: [...STARTER_EFFECTS],
     wins: 0,
-    rng: createRng(seedFromString(`run-${Date.now()}`)),
+    seed: seedFromString(`run-${Date.now()}-${Math.random()}`),
   };
 }
 
@@ -222,9 +241,9 @@ function opponentDeck(stage: Stage): { deck: DeckEntry[]; instances: CardInstanc
   const instances: CardInstance[] = [];
   const deck: DeckEntry[] = [];
 
-  for (const [definitionId, level, focus] of stage.creatures) {
-    const instance = foe.add(definitionId, { level });
-    foe.autoAllocate(instance.instanceId, focus);
+  for (const entry of stage.creatures) {
+    const instance = foe.add(entry.definitionId, { level: entry.level });
+    foe.autoAllocate(instance.instanceId, entry.focus);
     instances.push(foe.get(instance.instanceId));
     deck.push({ kind: 'creature', instanceId: instance.instanceId });
   }
@@ -251,7 +270,7 @@ function startDuel(): void {
     library,
     EFFECT_BY_ID,
     [...mine.instances, ...theirs.instances],
-    { seed: 1700 + state.stage * 131 },
+    { seed: 1700 + state.stage * 131, nexusHealth: stage.nexusHealth },
   );
 
   selectedUid = null;
@@ -314,7 +333,7 @@ function runOpponentTurn(): void {
       return;
     }
 
-    const action = chooseAction(duel, stage.profile);
+    const action = chooseAction(duel, AI_PROFILES[stage.profile]);
     const events = duel.apply(action);
     snapshot = duel.snapshot();
     playEvents(events, step);
@@ -652,29 +671,27 @@ function finishDuel(): void {
   for (const id of state.roster) before.set(id, state.collection.resolve(id).powerTier);
 
   // `state.stage` is still the duel just fought; it advances below.
-  const duelNumber = state.stage + 1;
-  const xp = Math.round(RUN_XP.base * duelNumber * (won ? RUN_XP.winMultiplier : 1));
-  const awards: XpAward[] = state.roster.map((id) => ({
-    instanceId: id,
-    name: state.collection.resolve(id).displayName,
-    xp,
-    deployed: true,
-  }));
-  applyXpAwards(state.collection, awards);
+  applyXpAwards(
+    state.collection,
+    computeDuelXp(state.collection, state.roster, state.stage + 1, won),
+  );
   promotedFrom = before;
 
   duel = null;
 
   if (!won) {
+    clearRun();
     showOutcome(false, result.turns);
     return;
   }
   state.stage += 1;
   if (state.stage >= STAGES.length) {
+    clearRun();
     showOutcome(true, result.turns);
     return;
   }
   lastTurns = result.turns;
+  saveRun();
   showDraft();
 }
 
@@ -699,7 +716,7 @@ function showDraft(): void {
   const state = run;
   if (!state) return;
 
-  offers = rollDraft(state.rng, library, EFFECTS, {
+  offers = rollDraft(createRng(state.seed + state.stage * 7919), library, EFFECTS, {
     rosterLevels: state.roster.map((id) => state.collection.resolve(id).level),
     copies: deckCopies(state),
   });
@@ -815,6 +832,7 @@ function takeOption(id: string): void {
   } else {
     state.effects.push(option.effectId);
   }
+  saveRun();
   showLevelUp(lastTurns);
 }
 
@@ -825,7 +843,7 @@ function cutCard(kind: 'creature' | 'effect', key: string): void {
 
   if (kind === 'creature') {
     // Keep at least a few bodies, or there is nothing to put on the board.
-    if (state.roster.length <= 6) return;
+    if (state.roster.length <= MIN_CREATURES) return;
     const at = state.roster.indexOf(key);
     if (at === -1) return;
     state.roster.splice(at, 1);
@@ -834,6 +852,7 @@ function cutCard(kind: 'creature' | 'effect', key: string): void {
     if (!Number.isInteger(at) || at < 0 || at >= state.effects.length) return;
     state.effects.splice(at, 1);
   }
+  saveRun();
   showLevelUp(lastTurns);
 }
 
@@ -1041,6 +1060,7 @@ function onProgressionClick(event: MouseEvent): void {
       } catch {
         return;
       }
+      saveRun();
       renderRoster();
       return;
     }
@@ -1061,6 +1081,7 @@ function onProgressionClick(event: MouseEvent): void {
   } catch {
     return;
   }
+  saveRun();
   renderRoster();
 }
 
@@ -1068,13 +1089,26 @@ function boot(): void {
   document.addEventListener('click', onClick);
   document.addEventListener('click', onProgressionClick);
 
+  const saved = loadRun();
+  if (saved) {
+    const resume = el('resume');
+    resume.hidden = false;
+    resume.textContent = `Continue run — duel ${saved.stage + 1} of ${STAGES.length}`;
+    resume.addEventListener('click', () => {
+      run = loadRun();
+      if (run) startDuel();
+    });
+  }
+
   el('begin').addEventListener('click', () => {
+    clearRun();
     run = newRun();
     startDuel();
   });
   el('end-turn').addEventListener('click', () => act({ type: 'end-turn' }));
   el('next-duel').addEventListener('click', startDuel);
   el('again').addEventListener('click', () => {
+    clearRun();
     run = newRun();
     startDuel();
   });

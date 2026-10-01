@@ -1,70 +1,18 @@
 /**
- * Turning a battle into XP.
+ * Turning a finished duel into XP.
  *
- * Cards that fought earn most of it, but benched cards still earn a share —
- * otherwise a player's deck ossifies around whichever six cards happened to be
- * good first, and the collection stops being interesting.
+ * Deliberately free of any combat type: the duel decides who won, and this
+ * decides what that is worth. Keeping the two apart is what lets the balance
+ * harness and the game award XP the same way.
  */
 
-import type { BattleResult } from '../battle/types.ts';
+import { duelXp } from '../content/campaign.ts';
 import type { Collection } from './collection.ts';
-
-export interface XpRewardConfig {
-  readonly base: number;
-  readonly perRound: number;
-  readonly winMultiplier: number;
-  readonly perKill: number;
-  /** One XP per this much damage dealt. */
-  readonly damagePerXp: number;
-  /** Fraction of the base award that undeployed cards receive. */
-  readonly benchShare: number;
-  readonly survivalBonus: number;
-}
-
-export const DEFAULT_XP_REWARDS: XpRewardConfig = {
-  base: 30,
-  perRound: 2,
-  winMultiplier: 1.5,
-  perKill: 15,
-  damagePerXp: 4,
-  benchShare: 0.25,
-  survivalBonus: 10,
-};
 
 export interface XpAward {
   readonly instanceId: string;
   readonly name: string;
   readonly xp: number;
-  readonly deployed: boolean;
-}
-
-export function computeXpAwards(
-  result: BattleResult,
-  playerId: string,
-  config: XpRewardConfig = DEFAULT_XP_REWARDS,
-): readonly XpAward[] {
-  const summary = result.players.find((player) => player.playerId === playerId);
-  if (!summary) throw new Error(`No battle summary for player "${playerId}".`);
-
-  const won = result.winner === playerId;
-  const pool = (config.base + config.perRound * result.rounds) * (won ? config.winMultiplier : 1);
-
-  return summary.cards.map((card) => {
-    if (!card.deployed) {
-      return {
-        instanceId: card.instanceId,
-        name: card.name,
-        xp: Math.round(pool * config.benchShare),
-        deployed: false,
-      };
-    }
-    const xp =
-      pool +
-      card.kills * config.perKill +
-      Math.floor(card.damageDealt / config.damagePerXp) +
-      (card.survived ? config.survivalBonus : 0);
-    return { instanceId: card.instanceId, name: card.name, xp: Math.round(xp), deployed: true };
-  });
 }
 
 export interface AppliedAward extends XpAward {
@@ -72,9 +20,30 @@ export interface AppliedAward extends XpAward {
   readonly growthPointsGained: number;
   readonly abilitiesUnlocked: readonly string[];
   readonly newLevel: number;
+  /** Upgrade forks now waiting to be chosen. */
+  readonly pendingUpgrades: number;
 }
 
-/** Applies awards to a collection, returning what each card actually gained. */
+/**
+ * Every creature in the deck earns the same, whether or not it was drawn.
+ * A roster where only the opening hand improves would quietly collapse into
+ * five cards the player always plays and the rest dead weight.
+ */
+export function computeDuelXp(
+  collection: Collection,
+  instanceIds: readonly string[],
+  duelNumber: number,
+  won: boolean,
+): readonly XpAward[] {
+  const xp = duelXp(duelNumber, won);
+  return instanceIds.map((instanceId) => ({
+    instanceId,
+    name: collection.resolve(instanceId).displayName,
+    xp,
+  }));
+}
+
+/** Applies awards to a collection, reporting what each card actually gained. */
 export function applyXpAwards(
   collection: Collection,
   awards: readonly XpAward[],
@@ -88,6 +57,28 @@ export function applyXpAwards(
       growthPointsGained: result.growthPointsGained,
       abilitiesUnlocked: result.abilitiesUnlocked,
       newLevel: result.instance.level,
+      pendingUpgrades: collection.resolve(award.instanceId).pendingUpgrades,
     };
   });
+}
+
+/**
+ * Spends growth points and takes upgrade forks the way a reasonable player
+ * would. Used by the balance harness, which has to make these choices
+ * thousands of times, and as the "just do something sensible" button.
+ */
+export function autoDevelop(
+  collection: Collection,
+  instanceId: string,
+  focus: readonly import('../core/stats.ts').StatKey[],
+  preferOffence: boolean,
+): void {
+  // Forks first: they change the stats the points are then spent alongside.
+  for (let guard = 0; guard < 12; guard += 1) {
+    const card = collection.resolve(instanceId);
+    if (card.upgradeChoice === null) break;
+    const [offence, other] = card.upgradeChoice;
+    collection.chooseUpgrade(instanceId, preferOffence ? offence.id : other.id);
+  }
+  collection.autoAllocate(instanceId, focus);
 }

@@ -1,9 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { GREEDY_CONTROLLER, VALUE_CONTROLLER } from '../src/battle/controllers.ts';
-import { runBattle } from '../src/battle/engine.ts';
-import type { BattleResult } from '../src/battle/types.ts';
 import { STANDARD_LIBRARY } from '../src/content/index.ts';
 import { resolveCard } from '../src/core/cardInstance.ts';
 import { rarityProfile } from '../src/core/rarity.ts';
@@ -14,7 +11,7 @@ import {
   describeDeck,
   validateDeck,
 } from '../src/game/deck.ts';
-import { DEFAULT_XP_REWARDS, applyXpAwards, computeXpAwards } from '../src/game/rewards.ts';
+import { applyXpAwards, autoDevelop, computeDuelXp } from '../src/game/rewards.ts';
 
 const library = STANDARD_LIBRARY;
 
@@ -200,7 +197,7 @@ describe('deck rules', () => {
 });
 
 describe('rewards', () => {
-  function playBattle(seed = 424242): { result: BattleResult; collection: Collection; ids: string[] } {
+  function roster(): { collection: Collection; ids: string[] } {
     const collection = new Collection(library);
     const ids = [
       'ember-whelp',
@@ -208,116 +205,78 @@ describe('rewards', () => {
       'tide-minnow',
       'pebble-grub',
       'dusk-mite',
-      'gale-sprite',
-      'scrapfang-pup',
-      'ashfang-jackal',
-      'cinder-imp',
-      'reef-sentinel',
-      'grave-moth',
-      'bramble-warden',
     ].map((definitionId) => collection.add(definitionId).instanceId);
-
-    const enemy = new Collection(library);
-    const enemyIds = [
-      'ember-whelp',
-      'thicket-hare',
-      'tide-minnow',
-      'pebble-grub',
-      'dusk-mite',
-      'gale-sprite',
-      'scrapfang-pup',
-      'ashfang-jackal',
-      'cinder-imp',
-      'reef-sentinel',
-      'grave-moth',
-      'bramble-warden',
-    ].map((definitionId) => enemy.add(definitionId).instanceId);
-
-    const result = runBattle(
-      [
-        { id: 'p1', name: 'Mine', deck: collection.deckInstances(ids), controller: GREEDY_CONTROLLER },
-        { id: 'p2', name: 'Theirs', deck: enemy.deckInstances(enemyIds), controller: VALUE_CONTROLLER },
-      ],
-      library,
-      { seed },
-    );
-
-    return { result, collection, ids };
+    return { collection, ids };
   }
 
-  it('awards every card in the deck, and more to the ones that fought', () => {
-    const { result } = playBattle();
-    const awards = computeXpAwards(result, 'p1');
-    assert.equal(awards.length, 12);
-
-    const fought = awards.filter((award) => award.deployed);
-    const benched = awards.filter((award) => !award.deployed);
-    assert.ok(fought.length > 0, 'somebody should have been deployed');
-    for (const award of awards) assert.ok(award.xp > 0, `${award.name} earned nothing`);
-    if (benched.length > 0) {
-      const bestBench = Math.max(...benched.map((award) => award.xp));
-      const worstFought = Math.min(...fought.map((award) => award.xp));
-      assert.ok(bestBench < worstFought, 'a benched card should never out-earn one that fought');
-    }
+  it('pays every card in the deck the same, drawn or not', () => {
+    const { collection, ids } = roster();
+    const awards = computeDuelXp(collection, ids, 1, true);
+    assert.equal(awards.length, ids.length);
+    assert.equal(new Set(awards.map((award) => award.xp)).size, 1);
+    assert.ok((awards[0] as { xp: number }).xp > 0);
   });
 
-  it('pays the winner more than the loser for the same battle', () => {
-    // Two identical decks can draw, so look for a decisive seed.
-    let decisive: BattleResult | null = null;
-    for (let seed = 1; seed <= 50 && decisive === null; seed += 1) {
-      const { result } = playBattle(seed * 1013);
-      if (result.winner !== null) decisive = result;
-    }
-    assert.ok(decisive !== null, 'no decisive battle found in 50 seeds');
-
-    const winnerBench = computeXpAwards(decisive, decisive.winner as string).filter(
-      (award) => !award.deployed,
-    );
-    const loserBench = computeXpAwards(decisive, decisive.loser as string).filter(
-      (award) => !award.deployed,
-    );
-
-    assert.ok(DEFAULT_XP_REWARDS.winMultiplier > 1);
-    if (winnerBench.length > 0 && loserBench.length > 0) {
-      assert.ok(
-        (winnerBench[0] as { xp: number }).xp > (loserBench[0] as { xp: number }).xp,
-        'winning should pay better',
-      );
-    }
+  it('pays more for a win than a loss', () => {
+    const { collection, ids } = roster();
+    const won = computeDuelXp(collection, ids, 2, true)[0] as { xp: number };
+    const lost = computeDuelXp(collection, ids, 2, false)[0] as { xp: number };
+    assert.ok(won.xp > lost.xp);
   });
 
-  it('applies awards, levelling the collection up', () => {
-    const { result, collection, ids } = playBattle();
+  it('pays more as the run goes on, because levels cost more', () => {
+    const { collection, ids } = roster();
+    const early = computeDuelXp(collection, ids, 1, true)[0] as { xp: number };
+    const late = computeDuelXp(collection, ids, 4, true)[0] as { xp: number };
+    assert.ok(late.xp > early.xp * 2, 'the curve should keep pace with rising level costs');
+  });
+
+  it('applies awards and reports what each card gained', () => {
+    const { collection, ids } = roster();
     const before = ids.map((id) => collection.resolve(id).level);
+    const applied = applyXpAwards(collection, computeDuelXp(collection, ids, 1, true));
 
-    const applied = applyXpAwards(collection, computeXpAwards(result, 'p1'));
-    assert.equal(applied.length, 12);
-
+    assert.equal(applied.length, ids.length);
+    assert.ok(applied.every((award) => award.levelsGained > 0));
     const after = ids.map((id) => collection.resolve(id).level);
-    assert.ok(
-      after.some((level, index) => level > (before[index] as number)),
-      'one battle should move at least one card up a level',
-    );
+    assert.ok(after.every((level, index) => level > (before[index] as number)));
     for (const id of ids) assert.equal(collection.get(id).battlesFought, 1);
   });
 
-  it('turns repeated battles into promotions', () => {
-    const collection = new Collection(library);
-    const instance = collection.add('ember-whelp');
-    assert.equal(collection.resolve(instance.instanceId).powerTier, 'weak');
-
-    // Enough XP to cap the card, then spend the points it earned.
-    collection.grantXp(instance.instanceId, 100000);
-    collection.autoAllocate(instance.instanceId, ['might', 'vitality']);
-
-    const card = collection.resolve(instance.instanceId);
-    assert.equal(card.level, rarityProfile('common').maxLevel);
-    assert.equal(card.promoted, true);
-    assert.ok(card.deployCost > resolveCard(collection.add('ember-whelp'), library).deployCost);
+  it('lands a common at roughly level 4, 6, 8 and 10 across a run', () => {
+    const { collection, ids } = roster();
+    const levels: number[] = [];
+    for (let duel = 1; duel <= 4; duel += 1) {
+      applyXpAwards(collection, computeDuelXp(collection, ids, duel, true));
+      levels.push(collection.resolve(ids[0] as string).level);
+    }
+    assert.deepEqual(levels, [4, 6, 8, 10]);
   });
 
-  it('rejects a summary for a player who was not in the battle', () => {
-    const { result } = playBattle();
-    assert.throws(() => computeXpAwards(result, 'p9'), /No battle summary/);
+  it('autoDevelop takes every pending fork and spends every point', () => {
+    const { collection, ids } = roster();
+    const id = ids[0] as string;
+    applyXpAwards(collection, computeDuelXp(collection, ids, 3, true));
+
+    assert.ok(collection.resolve(id).pendingUpgrades > 0, 'the fixture should have a fork waiting');
+    autoDevelop(collection, id, ['might'], true);
+
+    const card = collection.resolve(id);
+    assert.equal(card.pendingUpgrades, 0);
+    assert.equal(card.pointsUnspent, 0);
+    assert.ok(card.upgrades.length > 0);
+  });
+
+  it('turns repeated duels into a promotion', () => {
+    const { collection, ids } = roster();
+    const id = ids[0] as string;
+    assert.equal(collection.resolve(id).powerTier, 'weak');
+    for (let duel = 1; duel <= 4; duel += 1) {
+      applyXpAwards(collection, computeDuelXp(collection, ids, duel, true));
+      autoDevelop(collection, id, ['might', 'vitality'], true);
+    }
+    const card = collection.resolve(id);
+    assert.equal(card.promoted, true);
+    assert.ok(card.powerScore > 120);
   });
 });

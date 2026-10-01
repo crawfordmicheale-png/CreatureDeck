@@ -1,66 +1,54 @@
 /**
- * Playable demo of the CreatureDeck systems.
+ * Terminal tour of the CreatureDeck systems.
  *
  *   npm run demo                 every section
  *   npm run demo -- roster       the printed set, by rarity
- *   npm run demo -- divergence   three identical commons, three different builds
- *   npm run demo -- battle       one full battle
- *   npm run demo -- season       five battles, with XP carried between them
+ *   npm run demo -- divergence   one card, three owners
+ *   npm run demo -- paths        the upgrade forks a card is offered
+ *   npm run demo -- run          a simulated campaign, duel by duel
  *
- * Add `--verbose` for the blow-by-blow battle log, and `--seed <n>` to change
- * the deterministic seed.
+ * The game itself is in the browser; this exists so the card systems can be
+ * inspected without one.
  */
 
-import { runBattle } from '../battle/engine.ts';
-import type { BattlePlayerSetup } from '../battle/engine.ts';
-import { GREEDY_CONTROLLER, VALUE_CONTROLLER } from '../battle/controllers.ts';
+import { STAGES } from '../content/campaign.ts';
 import { STANDARD_LIBRARY } from '../content/index.ts';
-import type { ResolvedCard } from '../core/cardInstance.ts';
+import { resolveCard } from '../core/cardInstance.ts';
+import { trainTo } from '../core/leveling.ts';
 import { RARITIES, rarityProfile } from '../core/rarity.ts';
 import type { StatKey } from '../core/stats.ts';
+import { upgradeMilestones } from '../core/upgrades.ts';
 import { Collection } from '../game/collection.ts';
-import { describeDeck } from '../game/deck.ts';
-import { applyXpAwards, computeXpAwards } from '../game/rewards.ts';
-import { formatCard, formatCardRow, formatLog, heading, paint } from './format.ts';
+import { BALANCED_STYLE, simulateRun } from '../game/runSim.ts';
+import { formatCard, formatCardRow, heading, paint } from './format.ts';
 
 const library = STANDARD_LIBRARY;
 
 interface Options {
   readonly sections: readonly string[];
-  readonly verbose: boolean;
   readonly seed: number;
 }
 
 function parseArgs(argv: readonly string[]): Options {
   const sections: string[] = [];
-  let verbose = false;
-  let seed = 20260917;
-
+  let seed = 20261001;
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i] as string;
-    if (arg === '--verbose' || arg === '-v') verbose = true;
-    else if (arg === '--seed') {
+    if (arg === '--seed') {
       i += 1;
       seed = Number(argv[i] ?? seed);
     } else if (!arg.startsWith('-')) sections.push(arg);
   }
-
   return {
-    sections: sections.length > 0 ? sections : ['roster', 'divergence', 'battle', 'season'],
-    verbose,
+    sections: sections.length > 0 ? sections : ['roster', 'divergence', 'paths', 'run'],
     seed,
   };
 }
 
-// --------------------------------------------------------------- the roster
-
 function showRoster(): void {
   console.log(heading('The printed set'));
   console.log(
-    paint(
-      'Every copy of a card enters a collection exactly like this. Levelling is the only thing that changes it.\n',
-      'dim',
-    ),
+    paint('Every copy enters a collection exactly like this. Levelling is what changes it.\n', 'dim'),
   );
 
   const collection = new Collection(library);
@@ -68,7 +56,8 @@ function showRoster(): void {
     const profile = rarityProfile(rarity);
     console.log(
       paint(
-        `\n${profile.label} - max level ${profile.maxLevel}, ${profile.growthPointsPerLevel} growth points per level, ${profile.abilitySlots} ability slot(s)`,
+        `\n${profile.label} — max level ${profile.maxLevel}, ${profile.growthPointsPerLevel} points per level, ` +
+          `${upgradeMilestones(rarity).length} upgrade fork(s)`,
         'bold',
       ),
     );
@@ -79,297 +68,91 @@ function showRoster(): void {
   }
 }
 
-// ------------------------------------------------------------- the divergence
-
-/** The pitch: same printed card, same starting tier, three different creatures. */
 function showDivergence(): void {
   console.log(heading('One card, three owners'));
-
   const collection = new Collection(library);
-  const builds: ReadonlyArray<{ nickname: string; focus: readonly StatKey[]; note: string }> = [
-    {
-      nickname: 'Cinderbite',
-      focus: ['might'],
-      note: 'Everything into Might. Kills fast, dies faster.',
-    },
-    {
-      nickname: 'Old Scar',
-      focus: ['vitality', 'guard'],
-      note: 'Vitality and Guard. Will not die, will not hurry.',
-    },
-    {
-      nickname: 'Flicker',
-      focus: ['speed', 'might'],
-      note: 'Speed and Might. Strikes first and dodges the reply.',
-    },
+
+  const builds: ReadonlyArray<{ name: string; focus: readonly StatKey[]; note: string }> = [
+    { name: 'Cinderbite', focus: ['might'], note: 'Everything into Might. Kills fast, dies faster.' },
+    { name: 'Old Scar', focus: ['vitality', 'guard'], note: 'Will not die, will not hurry.' },
+    { name: 'Flicker', focus: ['speed', 'might'], note: 'Slips blows and hits back.' },
   ];
 
   const fresh = collection.add('ember-whelp', { nickname: 'Unlevelled' });
   console.log(paint('\nAs printed:', 'bold'));
   console.log(formatCard(collection.resolve(fresh.instanceId), '  '));
 
-  console.log(
-    paint(
-      '\nThe same common, taken to level 10 three different ways (18 growth points each):\n',
-      'dim',
-    ),
-  );
-
+  console.log(paint('\nThe same common at level 10, built three ways:\n', 'dim'));
   for (const build of builds) {
-    const instance = collection.add('ember-whelp', { nickname: build.nickname, level: 10 });
+    const instance = collection.add('ember-whelp', { nickname: build.name, level: 10 });
     collection.autoAllocate(instance.instanceId, build.focus);
     console.log(formatCard(collection.resolve(instance.instanceId), '  '));
-    console.log(paint(`  ${build.note}`, 'dim'));
-    console.log();
+    console.log(paint(`  ${build.note}\n`, 'dim'));
   }
+}
 
+function showPaths(): void {
+  console.log(heading('Upgrade forks'));
   console.log(
     paint(
-      'All three are Elite now - the same power tier, and the same deploy cost. The power score\n' +
-        'barely moved between builds, because a growth point is worth the same score in any stat.\n' +
-        'What changed is what the creature actually does on the board.\n',
+      'Every fourth level a card offers two paths. The pair is fixed per card, so two copies\n' +
+        'see the same fork — until they take different ones, after which the offers diverge too.\n',
       'dim',
     ),
   );
 
-  const maxedCommon = collection.resolve(
-    collection.autoAllocate(
-      collection.add('ember-whelp', { nickname: 'Cinderbite', level: 10 }).instanceId,
-      ['might'],
-    ).instanceId,
-  );
-  const freshEpic = collection.resolve(collection.add('pyreclaw-tyrant').instanceId);
-  console.log(paint('And the reason rarity still matters:', 'bold'));
-  console.log('  ' + formatCardRow(maxedCommon));
-  console.log('  ' + formatCardRow(freshEpic));
-  console.log(
-    paint(
-      '\n  A maxed common finally catches an epic that has never been played - and that epic has\n' +
-        '  twelve more levels of headroom to go.',
-      'dim',
-    ),
-  );
-}
-
-// -------------------------------------------------------------------- decks
-
-interface BuiltDeck {
-  readonly name: string;
-  readonly collection: Collection;
-  readonly instanceIds: readonly string[];
-}
-
-/** A veteran deck: cheap cards, levelled hard and built with intent. */
-function buildVeteranDeck(): BuiltDeck {
   const collection = new Collection(library);
-  const plan: ReadonlyArray<[string, number, readonly StatKey[], string]> = [
-    ['ember-whelp', 10, ['might'], 'Cinderbite'],
-    ['ember-whelp', 9, ['might', 'speed'], 'Scorch'],
-    ['scrapfang-pup', 10, ['might', 'vitality'], 'Gnash'],
-    ['thicket-hare', 10, ['speed'], 'Flicker'],
-    ['pebble-grub', 10, ['vitality', 'guard'], 'Old Scar'],
-    ['tide-minnow', 9, ['might', 'vitality'], 'Brine'],
-    ['dusk-mite', 10, ['speed', 'might'], 'Whisper'],
-    ['ashfang-jackal', 12, ['might'], 'Ashfang'],
-    ['cinder-imp', 12, ['might', 'speed'], 'Ember'],
-    ['reef-sentinel', 12, ['vitality', 'guard'], 'Bulwark'],
-    ['grave-moth', 11, ['speed', 'might'], 'Pall'],
-    ['bramble-warden', 12, ['vitality', 'guard'], 'Thistle'],
-  ];
+  for (const definitionId of ['ember-whelp', 'pebble-grub', 'ashfang-jackal', 'nightmare-stalker']) {
+    const definition = library.getCard(definitionId);
+    console.log(paint(`\n${definition.name} (${definition.rarity})`, 'bold'));
 
-  const instanceIds = plan.map(([definitionId, level, focus, nickname]) => {
-    const instance = collection.add(definitionId, { level, nickname });
-    collection.autoAllocate(instance.instanceId, focus);
-    return instance.instanceId;
-  });
-
-  return { name: 'Ashen Vanguard', collection, instanceIds };
+    const id = collection.add(definitionId, { level: rarityProfile(definition.rarity).maxLevel })
+      .instanceId;
+    for (let step = 0; step < 6; step += 1) {
+      const card = collection.resolve(id);
+      if (card.upgradeChoice === null) break;
+      const [left, right] = card.upgradeChoice;
+      console.log(
+        `  level ${(step + 1) * 4}  ${paint(left.name, 'yellow')} — ${left.description}`,
+      );
+      console.log(`           ${paint(right.name, 'cyan')} — ${right.description}`);
+      collection.chooseUpgrade(id, left.id);
+    }
+  }
 }
 
-/** A rich deck: rares and epics, straight out of the packs, never levelled. */
-function buildFreshDeck(): BuiltDeck {
-  const collection = new Collection(library);
-  const plan: readonly string[] = [
-    'stormcaller-roc',
-    'stormcaller-roc',
-    'magma-colossus',
-    'abyssal-serpent',
-    'abyssal-serpent',
-    'verdant-matriarch',
-    'nightmare-stalker',
-    'nightmare-stalker',
-    'pyreclaw-tyrant',
-    'glacierheart-titan',
-    'void-harbinger',
-    'skyfather-drake',
-  ];
-  const instanceIds = plan.map((definitionId) => collection.add(definitionId).instanceId);
-  return { name: 'Gilded Menagerie', collection, instanceIds };
-}
-
-function summariseDeck(deck: BuiltDeck): void {
-  const stats = describeDeck(deck.collection.deckInstances(deck.instanceIds), library);
-  const tiers = Object.entries(stats.tierCounts)
-    .map(([tier, count]) => `${count} ${tier}`)
-    .join(', ');
+function showRun(options: Options): void {
+  console.log(heading('A simulated run'));
   console.log(
-    `  ${paint(deck.name.padEnd(20), 'bold')} avg level ${stats.averageLevel.toFixed(1)}  ` +
-      `total cost ${stats.totalDeployCost}  total score ${stats.totalPowerScore}  [${tiers}]`,
+    paint('Both sides played by the AI, so this is about the decks rather than the piloting.\n', 'dim'),
   );
-}
 
-function setupFor(deck: BuiltDeck, id: string, controllerIndex: number): BattlePlayerSetup {
-  return {
-    id,
-    name: deck.name,
-    deck: deck.collection.deckInstances(deck.instanceIds),
-    controller: controllerIndex === 0 ? GREEDY_CONTROLLER : VALUE_CONTROLLER,
-  };
-}
-
-// ------------------------------------------------------------------- battle
-
-function showBattle(options: Options): void {
-  console.log(heading('A battle'));
-
-  const veterans = buildVeteranDeck();
-  const fresh = buildFreshDeck();
-  summariseDeck(veterans);
-  summariseDeck(fresh);
+  const outcome = simulateRun(library, { seed: options.seed, style: BALANCED_STYLE });
+  for (const duel of outcome.duels) {
+    const verdict = duel.won ? paint('won ', 'green') : paint('lost', 'red');
+    console.log(
+      `  ${duel.stage + 1} ${duel.stageName.padEnd(24)} ${verdict}` +
+        `  ${String(duel.turns).padStart(2)} turns` +
+        `  nexus ${duel.playerNexus}–${duel.enemyNexus}` +
+        `  deck ${duel.playerDeckSize}`,
+    );
+  }
   console.log(
     paint(
-      '\n  The levelled deck is worth far more power score - and costs half again as much energy to\n' +
-        '  get onto the board. That is the trade the power-tier system makes: growth is paid for in\n' +
-        '  tempo, which is what keeps an unlevelled collection playable.\n',
+      `\n  ${outcome.stagesWon} of ${STAGES.length} taken; deck ended at ` +
+        `${outcome.finalCreatures} creatures and ${outcome.finalEffects} effects.`,
       'dim',
     ),
   );
-
-  const result = runBattle(
-    [setupFor(veterans, 'p1', 0), setupFor(fresh, 'p2', 1)],
-    library,
-    { seed: options.seed },
-  );
-
-  console.log(formatLog(result.log, { verbose: options.verbose }));
-
-  console.log(paint('\nCard performance:', 'bold'));
-  for (const player of result.players) {
-    console.log(paint(`\n  ${player.name} - nexus ${player.nexusHealth}`, 'bold'));
-    const fought = player.cards.filter((card) => card.deployed);
-    for (const card of [...fought].sort((a, b) => b.damageDealt - a.damageDealt)) {
-      console.log(
-        `    ${card.name.padEnd(24)} ${String(card.damageDealt).padStart(4)} dealt  ` +
-          `${String(card.damageTaken).padStart(4)} taken  ${card.kills} kill(s)  ` +
-          (card.survived ? paint('survived', 'green') : paint('fell', 'red')),
-      );
-    }
-  }
 }
-
-// ------------------------------------------------------------------- season
-
-/** The loop that makes levelling matter: fight, earn, spend, fight again. */
-function showSeason(options: Options): void {
-  console.log(heading('A season: five battles, XP carried forward'));
-
-  const rookies = new Collection(library);
-  const plan: ReadonlyArray<[string, readonly StatKey[], string]> = [
-    ['ember-whelp', ['might'], 'Cinderbite'],
-    ['scrapfang-pup', ['might', 'vitality'], 'Gnash'],
-    ['thicket-hare', ['speed'], 'Flicker'],
-    ['pebble-grub', ['vitality', 'guard'], 'Old Scar'],
-    ['tide-minnow', ['might', 'vitality'], 'Brine'],
-    ['dusk-mite', ['speed', 'might'], 'Whisper'],
-    ['gale-sprite', ['vitality'], 'Zephyr'],
-    ['ashfang-jackal', ['might'], 'Ashfang'],
-    ['cinder-imp', ['might', 'speed'], 'Ember'],
-    ['reef-sentinel', ['vitality', 'guard'], 'Bulwark'],
-    ['grave-moth', ['speed', 'might'], 'Pall'],
-    ['bramble-warden', ['vitality', 'guard'], 'Thistle'],
-  ];
-
-  const focusByInstance = new Map<string, readonly StatKey[]>();
-  const instanceIds = plan.map(([definitionId, focus, nickname]) => {
-    const instance = rookies.add(definitionId, { nickname });
-    focusByInstance.set(instance.instanceId, focus);
-    return instance.instanceId;
-  });
-
-  const before = instanceIds.map((id) => rookies.resolve(id));
-  const opponent = buildFreshDeck();
-
-  for (let battle = 1; battle <= 5; battle += 1) {
-    const result = runBattle(
-      [
-        {
-          id: 'p1',
-          name: 'Rookies',
-          deck: rookies.deckInstances(instanceIds),
-          controller: GREEDY_CONTROLLER,
-        },
-        setupFor(opponent, 'p2', 1),
-      ],
-      library,
-      { seed: options.seed + battle },
-    );
-
-    const awards = computeXpAwards(result, 'p1');
-    const applied = applyXpAwards(rookies, awards);
-
-    // Each owner spends their new points along the line they picked for that copy.
-    for (const instanceId of instanceIds) {
-      rookies.autoAllocate(instanceId, focusByInstance.get(instanceId) ?? ['might']);
-    }
-
-    const levelled = applied.filter((award) => award.levelsGained > 0);
-    const outcome =
-      result.winner === 'p1' ? paint('won', 'green') : result.winner === null ? 'drew' : paint('lost', 'red');
-    console.log(
-      `\n  Battle ${battle}: ${outcome} in ${result.rounds} rounds. ` +
-        `${levelled.length} card(s) levelled.`,
-    );
-    for (const award of levelled) {
-      const unlocked =
-        award.abilitiesUnlocked.length > 0
-          ? paint(
-              `  unlocked ${award.abilitiesUnlocked.map((id) => library.getAbility(id).name).join(', ')}`,
-              'green',
-            )
-          : '';
-      console.log(
-        `    ${award.name.padEnd(18)} +${String(award.xp).padStart(4)} XP  ` +
-          `-> L${award.newLevel} (+${award.growthPointsGained} points)${unlocked}`,
-      );
-    }
-  }
-
-  console.log(paint('\n  Where the roster ended up:\n', 'bold'));
-  const after = instanceIds.map((id) => rookies.resolve(id));
-  for (let i = 0; i < after.length; i += 1) {
-    const start = before[i] as ResolvedCard;
-    const end = after[i] as ResolvedCard;
-    const promoted =
-      end.powerTier !== start.powerTier
-        ? paint(`  ${start.tier.label} -> ${end.tier.label}`, 'green')
-        : '';
-    console.log(
-      `    ${end.displayName.padEnd(18)} L${String(start.level).padStart(2)} -> L${String(end.level).padStart(2)}  ` +
-        `score ${String(start.powerScore).padStart(4)} -> ${String(end.powerScore).padStart(4)}  ` +
-        `cost ${start.deployCost} -> ${end.deployCost}${promoted}`,
-    );
-  }
-}
-
-// --------------------------------------------------------------------- main
 
 function main(): void {
   const options = parseArgs(process.argv.slice(2));
   const sections: Record<string, () => void> = {
     roster: showRoster,
     divergence: showDivergence,
-    battle: () => showBattle(options),
-    season: () => showSeason(options),
+    paths: showPaths,
+    run: () => showRun(options),
   };
 
   for (const name of options.sections) {
