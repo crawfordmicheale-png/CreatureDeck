@@ -13,11 +13,17 @@ import { ART } from './art.ts';
 import { STANDARD_LIBRARY, EFFECT_BY_ID, EFFECTS } from '../src/content/index.ts';
 import { staminaFor } from '../src/core/cardDefinition.ts';
 import type { CardInstance } from '../src/core/cardInstance.ts';
+import { createCardInstance, resolveCard } from '../src/core/cardInstance.ts';
 import { nextPowerTier, powerTierProfile } from '../src/core/powerTier.ts';
 import { rarityProfile } from '../src/core/rarity.ts';
+import { createRng, seedFromString } from '../src/core/rng.ts';
+import type { Rng } from '../src/core/rng.ts';
+import { effectText } from '../src/core/effects.ts';
 import { STAT_KEYS, STAT_LABELS } from '../src/core/stats.ts';
 import type { StatKey } from '../src/core/stats.ts';
 import { Collection } from '../src/game/collection.ts';
+import { optionId, rollDraft } from '../src/game/draft.ts';
+import type { DraftOption } from '../src/game/draft.ts';
 import { applyXpAwards } from '../src/game/rewards.ts';
 import type { XpAward } from '../src/game/rewards.ts';
 import { STEADY, RUTHLESS, chooseAction } from '../src/duel/ai.ts';
@@ -143,17 +149,32 @@ const STARTER_EFFECTS: readonly string[] = [
   'hollow-pact',
 ];
 
-/** XP for a run: four level-up screens have to carry a card most of the way. */
-const RUN_XP = { perDuel: 900, winBonus: 450, perSurvivor: 120 };
+/**
+ * XP for a run.
+ *
+ * Scaled by how far in the duel is, because levels get steeply more expensive
+ * — a flat award dumps a card from level 1 to 6 in the opening duel and leaves
+ * the later level-up screens with nothing to spend. This curve lands a common
+ * at roughly level 4, 6, 8 and 10 across the four screens, which is one
+ * upgrade fork early and one late.
+ */
+const RUN_XP = { base: 420, winMultiplier: 1.3 };
 
 // --------------------------------------------------------------------- state
 
 interface RunState {
   stage: number;
   collection: Collection;
+  /** Creature instance ids in the deck. */
   roster: string[];
+  /** Effect card ids in the deck; duplicates are allowed. */
+  effects: string[];
   wins: number;
+  rng: Rng;
 }
+
+/** A deck may never be cut below this. */
+const MIN_DECK = 12;
 
 let run: RunState | null = null;
 let duel: Duel | null = null;
@@ -177,14 +198,21 @@ function newRun(): RunState {
   const roster = STARTER.map(([definitionId, nickname]) =>
     collection.add(definitionId, { nickname }).instanceId,
   );
-  return { stage: 0, collection, roster, wins: 0 };
+  return {
+    stage: 0,
+    collection,
+    roster,
+    effects: [...STARTER_EFFECTS],
+    wins: 0,
+    rng: createRng(seedFromString(`run-${Date.now()}`)),
+  };
 }
 
 function playerDeck(state: RunState): { deck: DeckEntry[]; instances: CardInstance[] } {
   const instances = state.roster.map((id) => state.collection.get(id));
   const deck: DeckEntry[] = [
     ...state.roster.map((id): DeckEntry => ({ kind: 'creature', instanceId: id })),
-    ...STARTER_EFFECTS.map((effectId): DeckEntry => ({ kind: 'effect', effectId })),
+    ...state.effects.map((effectId): DeckEntry => ({ kind: 'effect', effectId })),
   ];
   return { deck, instances };
 }
@@ -623,10 +651,13 @@ function finishDuel(): void {
   const before = new Map<string, string>();
   for (const id of state.roster) before.set(id, state.collection.resolve(id).powerTier);
 
+  // `state.stage` is still the duel just fought; it advances below.
+  const duelNumber = state.stage + 1;
+  const xp = Math.round(RUN_XP.base * duelNumber * (won ? RUN_XP.winMultiplier : 1));
   const awards: XpAward[] = state.roster.map((id) => ({
     instanceId: id,
     name: state.collection.resolve(id).displayName,
-    xp: RUN_XP.perDuel + (won ? RUN_XP.winBonus : 0),
+    xp,
     deployed: true,
   }));
   applyXpAwards(state.collection, awards);
@@ -643,7 +674,167 @@ function finishDuel(): void {
     showOutcome(true, result.turns);
     return;
   }
-  showLevelUp(result.turns);
+  lastTurns = result.turns;
+  showDraft();
+}
+
+// ------------------------------------------------------------------- draft
+
+let lastTurns = 0;
+let offers: readonly DraftOption[] = [];
+
+function deckCopies(state: RunState): Map<string, number> {
+  const copies = new Map<string, number>();
+  for (const id of state.roster) {
+    const definitionId = state.collection.get(id).definitionId;
+    copies.set(definitionId, (copies.get(definitionId) ?? 0) + 1);
+  }
+  for (const effectId of state.effects) {
+    copies.set(effectId, (copies.get(effectId) ?? 0) + 1);
+  }
+  return copies;
+}
+
+function showDraft(): void {
+  const state = run;
+  if (!state) return;
+
+  offers = rollDraft(state.rng, library, EFFECTS, {
+    rosterLevels: state.roster.map((id) => state.collection.resolve(id).level),
+    copies: deckCopies(state),
+  });
+
+  el('draft-head').textContent = `${STAGES[state.stage - 1]?.name ?? ''} broken`;
+  el('draft-sub').textContent =
+    `${lastTurns} turns. Your deck holds ${state.roster.length + state.effects.length} cards.`;
+  el('cull-pane').hidden = true;
+  el('cull-toggle').textContent = 'Cull a card instead';
+
+  renderDraft();
+  show('screen-draft');
+}
+
+function renderDraft(): void {
+  const state = run;
+  if (!state) return;
+
+  if (offers.length === 0) {
+    el('draft-options').innerHTML =
+      '<p class="hint">Nothing left in the set that your deck has room for.</p>';
+    return;
+  }
+
+  el('draft-options').innerHTML = offers
+    .map((option) => {
+      const id = optionId(option);
+      if (option.kind === 'effect') {
+        const effect = EFFECTS.find((candidate) => candidate.id === id);
+        return `
+          <button class="pick" data-take="${esc(id)}" style="--tier:var(--rarity-${option.rarity})">
+            <span class="kind">Effect</span>
+            <span class="portrait"><img src="${art(id)}" alt=""></span>
+            <span class="nm">${esc(option.name)}</span>
+            <span class="meta" style="color:var(--rarity-${option.rarity})">${esc(
+              option.rarity,
+            )} · costs ${effect?.cost ?? '?'}</span>
+            <span class="txt">${esc(effect ? effectText(effect) : '')}</span>
+          </button>`;
+      }
+
+      // Preview the recruit exactly as it would arrive.
+      const preview = resolveCard(
+        createCardInstance(library.getCard(option.definitionId), {
+          instanceId: `preview-${id}`,
+          level: option.level,
+        }),
+        library,
+      );
+      return `
+        <button class="pick" data-take="${esc(id)}" style="--tier:var(--tier-${preview.powerTier})">
+          <span class="kind">Creature</span>
+          <span class="portrait"><img src="${art(id)}" alt=""></span>
+          <span class="nm">${esc(option.name)}</span>
+          <span class="meta" style="color:var(--rarity-${option.rarity})">${esc(
+            preview.rarity.label,
+          )} · ${esc(preview.tier.label)} · joins at L${option.level}</span>
+          <span class="line">${preview.stats.might} atk · ${preview.stats.vitality} hp · ${
+            preview.stamina
+          } stam · costs ${preview.deployCost}</span>
+          <span class="txt">${esc(
+            preview.abilities.map((ability) => ability.name).join(', ') || 'No ability yet',
+          )}${
+            preview.pendingUpgrades > 0
+              ? ` · ${preview.pendingUpgrades} path${preview.pendingUpgrades === 1 ? '' : 's'} to choose`
+              : ''
+          }</span>
+        </button>`;
+    })
+    .join('');
+}
+
+function renderCull(): void {
+  const state = run;
+  if (!state) return;
+  const rows: string[] = [];
+
+  for (const id of state.roster) {
+    const card = state.collection.resolve(id);
+    rows.push(`
+      <button class="cull-row" data-cut-creature="${esc(id)}">
+        <img src="${art(card.definition.id)}" alt="">
+        <span>
+          <span class="nm">${esc(card.displayName)}</span>
+          <span class="meta"> — L${card.level} ${esc(card.rarity.label)} ${esc(card.tier.label)}</span>
+        </span>
+      </button>`);
+  }
+  state.effects.forEach((effectId, index) => {
+    const effect = EFFECTS.find((candidate) => candidate.id === effectId);
+    rows.push(`
+      <button class="cull-row" data-cut-effect="${index}">
+        <img src="${art(effectId)}" alt="">
+        <span>
+          <span class="nm">${esc(effect?.name ?? effectId)}</span>
+          <span class="meta"> — effect, costs ${effect?.cost ?? '?'}</span>
+        </span>
+      </button>`);
+  });
+
+  el('cull-options').innerHTML = rows.join('');
+}
+
+function takeOption(id: string): void {
+  const state = run;
+  if (!state) return;
+  const option = offers.find((candidate) => optionId(candidate) === id);
+  if (!option) return;
+
+  if (option.kind === 'creature') {
+    const instance = state.collection.add(option.definitionId, { level: option.level });
+    state.roster.push(instance.instanceId);
+  } else {
+    state.effects.push(option.effectId);
+  }
+  showLevelUp(lastTurns);
+}
+
+function cutCard(kind: 'creature' | 'effect', key: string): void {
+  const state = run;
+  if (!state) return;
+  if (state.roster.length + state.effects.length <= MIN_DECK) return;
+
+  if (kind === 'creature') {
+    // Keep at least a few bodies, or there is nothing to put on the board.
+    if (state.roster.length <= 6) return;
+    const at = state.roster.indexOf(key);
+    if (at === -1) return;
+    state.roster.splice(at, 1);
+  } else {
+    const at = Number(key);
+    if (!Number.isInteger(at) || at < 0 || at >= state.effects.length) return;
+    state.effects.splice(at, 1);
+  }
+  showLevelUp(lastTurns);
 }
 
 let promotedFrom = new Map<string, string>();
@@ -708,8 +899,35 @@ function renderRoster(): void {
           </div>`;
       }).join('');
 
+      const fork =
+        card.upgradeChoice === null
+          ? ''
+          : `
+          <div class="fork">
+            <div class="fork-head">Level ${
+              upgradeMilestonesFor(card)
+            } — choose a path, permanently</div>
+            ${card.upgradeChoice
+              .map(
+                (option) => `
+              <button class="path" data-upgrade="${esc(id)}" data-option="${esc(option.id)}">
+                <span class="kind">${esc(option.kind)}</span>
+                <span class="nm">${esc(option.name)}</span>
+                <span class="txt">${esc(option.description)}</span>
+              </button>`,
+              )
+              .join('')}
+          </div>`;
+
+      const taken =
+        card.upgrades.length === 0
+          ? ''
+          : `<div class="taken">${card.upgrades
+              .map((upgrade) => `<span>${esc(upgrade.name)}</span>`)
+              .join('')}</div>`;
+
       return `
-        <div class="entry" style="--tier:var(--tier-${card.powerTier})">
+        <div class="entry${card.pendingUpgrades > 0 ? ' pending' : ''}" style="--tier:var(--tier-${card.powerTier})">
           <div class="who">
             <div class="face"><img src="${art(card.definition.id)}" alt=""></div>
             <div>
@@ -736,9 +954,11 @@ function renderRoster(): void {
                     : ''
                 }</small>
               </div>
+              ${taken}
             </div>
           </div>
           <div class="alloc">${stats}</div>
+          ${fork}
         </div>`;
     })
     .join('');
@@ -746,6 +966,20 @@ function renderRoster(): void {
   const left = totalUnspent();
   el('points-left').textContent = left === 0 ? 'All points spent' : `${left} growth points unspent`;
   el('points-left').classList.toggle('warn', left > 0);
+
+  // An unchosen path is pure loss, so it blocks the exit. Unspent growth
+  // points do not — holding those back is a legitimate choice.
+  const forks = state.roster.reduce(
+    (sum, id) => sum + state.collection.resolve(id).pendingUpgrades,
+    0,
+  );
+  el<HTMLButtonElement>('next-duel').disabled = forks > 0;
+  el('upgrade-nag').hidden = forks === 0;
+}
+
+/** The milestone level the pending fork belongs to. */
+function upgradeMilestonesFor(card: { level: number; upgrades: readonly unknown[] }): number {
+  return (card.upgrades.length + 1) * 4;
 }
 
 function showOutcome(victory: boolean, turns: number): void {
@@ -776,7 +1010,42 @@ function showOutcome(victory: boolean, turns: number): void {
 
 // --------------------------------------------------------------------- wiring
 
-function onRosterClick(event: MouseEvent): void {
+function onProgressionClick(event: MouseEvent): void {
+  const node = (event.target as HTMLElement).closest<HTMLElement>(
+    '[data-take],[data-cut-creature],[data-cut-effect],[data-upgrade]',
+  );
+  if (node) {
+    const state = run;
+    if (!state) return;
+
+    const take = node.getAttribute('data-take');
+    if (take) {
+      takeOption(take);
+      return;
+    }
+    const cutCreature = node.getAttribute('data-cut-creature');
+    if (cutCreature) {
+      cutCard('creature', cutCreature);
+      return;
+    }
+    const cutEffect = node.getAttribute('data-cut-effect');
+    if (cutEffect) {
+      cutCard('effect', cutEffect);
+      return;
+    }
+    const upgradeFor = node.getAttribute('data-upgrade');
+    const optionChosen = node.getAttribute('data-option');
+    if (upgradeFor && optionChosen) {
+      try {
+        state.collection.chooseUpgrade(upgradeFor, optionChosen);
+      } catch {
+        return;
+      }
+      renderRoster();
+      return;
+    }
+  }
+
   const target = (event.target as HTMLElement).closest('[data-plus],[data-minus]');
   if (!(target instanceof HTMLElement)) return;
   const state = run;
@@ -797,7 +1066,7 @@ function onRosterClick(event: MouseEvent): void {
 
 function boot(): void {
   document.addEventListener('click', onClick);
-  document.addEventListener('click', onRosterClick);
+  document.addEventListener('click', onProgressionClick);
 
   el('begin').addEventListener('click', () => {
     run = newRun();
@@ -808,6 +1077,15 @@ function boot(): void {
   el('again').addEventListener('click', () => {
     run = newRun();
     startDuel();
+  });
+  el('cull-toggle').addEventListener('click', () => {
+    const pane = el('cull-pane');
+    const opening = pane.hidden;
+    pane.hidden = !opening;
+    el('draft-options').hidden = opening;
+    el('draft-title').hidden = opening;
+    el('cull-toggle').textContent = opening ? 'Take a card instead' : 'Cull a card instead';
+    if (opening) renderCull();
   });
   el('fast').addEventListener('click', () => {
     fast = !fast;

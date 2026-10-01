@@ -11,6 +11,7 @@ export * from './core/rng.ts';
 export * from './core/scoring.ts';
 export * from './core/stats.ts';
 export * from './core/effects.ts';
+export * from './core/upgrades.ts';
 
 // The legacy auto-resolver in `src/battle/` is no longer the game — it is kept
 // only for the CLI demo and the balance harness, and is not re-exported here.

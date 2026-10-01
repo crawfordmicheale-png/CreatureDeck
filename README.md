@@ -30,6 +30,14 @@ comes down, which creature swings, and what it swings at.
   have cost, so holding one is a real decision.
 - **Levelling.** Between duels your creatures earn growth points and you choose
   the stats. Push a card far enough and it promotes a power tier for good.
+- **Upgrade paths.** Every fourth level a card offers two mutually exclusive
+  paths — one offensive, one defensive or utility — and the one you take is
+  permanent. The fork is deterministic per card, so two copies in the same
+  state see the same offer; take opposite paths and they diverge for good,
+  including the offers they get later.
+- **Drafting.** After each duel you take one of three cards from the whole
+  printed set, or cull a card instead. Recruits join at the middle level of
+  your warband, so a late draft is still worth taking.
 
 Five duels stand between the starting warband and the Hollow Crown.
 
@@ -60,7 +68,7 @@ Node 22.6+ is the only requirement. There are no runtime dependencies.
 ```bash
 npm install          # only installs TypeScript and @types/node, for typechecking
 npm run demo         # the whole tour
-npm test             # 130 tests
+npm test             # 149 tests
 npm run balance      # archetype win-rate sweep
 ```
 
@@ -133,15 +141,15 @@ Everything routes through a seeded RNG, so a battle replayed with the same decks
 
 ```
 src/core/       rarity, power tiers, stats, scoring, card definitions,
-                card instances, levelling — no combat logic at all
+                card instances, levelling, upgrade paths — no combat logic
 src/duel/       the game: turn state machine, abilities, effects, opponent AI
-src/game/       collections, deck rules, XP rewards
+src/game/       collections, deck rules, XP rewards, drafting
 src/content/    the printed set: 28 creatures, 18 abilities, 10 effect cards
 src/battle/     legacy auto-resolver, kept only for the CLI demo and the
                 balance harness. Not part of the game and not exported.
 src/cli/        the demo and the balance harness (both on the legacy resolver)
 web/            the browser front-end and its art, built to one HTML file
-test/           130 tests
+test/           149 tests
 ```
 
 `src/core` knows nothing about battles, and `src/battle` knows nothing about the specific cards — everything takes a `CardLibrary`, so tests run against three-card fixtures and the real game against the full roster.

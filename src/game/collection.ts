@@ -92,6 +92,24 @@ export class Collection {
     return this.replace(respec(this.get(instanceId)));
   }
 
+  /**
+   * Takes one of the two paths offered at the card's next milestone. Throws if
+   * nothing is pending or the id is not one of the two on offer, so a bad
+   * click can never quietly hand out a free upgrade.
+   */
+  chooseUpgrade(instanceId: string, upgradeId: string): CardInstance {
+    const card = this.resolve(instanceId);
+    if (card.upgradeChoice === null) {
+      throw new Error(`${card.displayName} has no upgrade waiting.`);
+    }
+    const legal = card.upgradeChoice.some((option) => option.id === upgradeId);
+    if (!legal) {
+      throw new Error(`"${upgradeId}" is not on offer for ${card.displayName}.`);
+    }
+    const instance = this.get(instanceId);
+    return this.replace({ ...instance, upgrades: [...instance.upgrades, upgradeId] });
+  }
+
   rename(instanceId: string, nickname: string | null): CardInstance {
     return this.replace({ ...this.get(instanceId), nickname });
   }

@@ -33,7 +33,11 @@
       </div>
       <div>
         <h3>Levelling is yours to aim</h3>
-        <p>Win, and your creatures earn growth points. You choose the stats. Push far enough and a card promotes tier for good.</p>
+        <p>Win, and your creatures earn growth points, and every fourth level a card offers two paths. The one you take is permanent.</p>
+      </div>
+      <div>
+        <h3>The deck grows with you</h3>
+        <p>After each duel you draft a card from the whole set, or cut one loose. Recruits arrive at the level of the warband they join.</p>
       </div>
     </div>
 
@@ -102,12 +106,36 @@
   </div>
 </section>
 
+<!-- -------------------------------------------------------------- draft -->
+<section class="screen" id="screen-draft">
+  <div class="topbar">
+    <div class="wrap bar-inner">
+      <strong id="draft-head">Spoils</strong>
+      <span class="grow"></span>
+      <button id="cull-toggle">Cull a card instead</button>
+    </div>
+  </div>
+
+  <div class="wrap draft">
+    <h2 id="draft-title">Take one into the warband</h2>
+    <p class="hint" id="draft-sub"></p>
+    <div class="draft-grid" id="draft-options"></div>
+
+    <div id="cull-pane" hidden>
+      <h2>Cut a card loose</h2>
+      <p class="hint">A leaner deck draws its best cards more often. You cannot go below twelve.</p>
+      <div class="cull-grid" id="cull-options"></div>
+    </div>
+  </div>
+</section>
+
 <!-- ------------------------------------------------------------ levelup -->
 <section class="screen" id="screen-levelup">
   <div class="topbar">
     <div class="wrap bar-inner">
       <strong id="points-left">—</strong>
       <span class="grow"></span>
+      <span class="hint" id="upgrade-nag" hidden>Choose every path before moving on.</span>
       <button class="primary" id="next-duel">Next duel</button>
     </div>
   </div>

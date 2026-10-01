@@ -16,6 +16,16 @@ import { powerTierForScore, powerTierProfile, scoreToNextTier } from './powerTie
 import type { RarityProfile } from './rarity.ts';
 import { rarityProfile, totalGrowthPointsAtLevel } from './rarity.ts';
 import { powerScore } from './scoring.ts';
+import type { UpgradeDefinition } from './upgrades.ts';
+import {
+  milestonesReached,
+  sumUpgradeStamina,
+  sumUpgradeStats,
+  upgradeById,
+  upgradeChoices,
+  upgradeMilestones,
+} from './upgrades.ts';
+import { staminaFor } from './cardDefinition.ts';
 import { STAT_POINT_VALUES } from './scoring.ts';
 import type { StatBlock, StatKey } from './stats.ts';
 import { STAT_KEYS, createStats, roundStats } from './stats.ts';
@@ -35,6 +45,8 @@ export interface CardInstance {
   readonly xp: number;
   /** Growth points spent per stat. */
   readonly allocation: StatBlock;
+  /** Upgrade ids taken, one per milestone reached, in milestone order. */
+  readonly upgrades: readonly string[];
   readonly nickname: string | null;
   readonly battlesFought: number;
 }
@@ -44,6 +56,7 @@ export interface CreateInstanceOptions {
   level?: number;
   xp?: number;
   allocation?: Partial<StatBlock>;
+  upgrades?: readonly string[];
   nickname?: string | null;
   battlesFought?: number;
 }
@@ -68,6 +81,7 @@ export function createCardInstance(
     level,
     xp: Math.max(0, options.xp ?? 0),
     allocation: createStats(options.allocation ?? {}),
+    upgrades: options.upgrades ?? [],
     nickname: options.nickname ?? null,
     battlesFought: options.battlesFought ?? 0,
   };
@@ -102,6 +116,15 @@ export interface ResolvedCard {
   readonly pointsSpent: number;
   readonly pointsUnspent: number;
   readonly nextUnlockLevel: number | null;
+  /** Upgrades already taken, in the order they were chosen. */
+  readonly upgrades: readonly UpgradeDefinition[];
+  /** Milestones reached but not yet spent. */
+  readonly pendingUpgrades: number;
+  /** The fork waiting to be decided, or null when nothing is pending. */
+  readonly upgradeChoice: readonly [UpgradeDefinition, UpgradeDefinition] | null;
+  /** Level of the next milestone, or null once they are all unlocked. */
+  readonly nextUpgradeLevel: number | null;
+  readonly stamina: number;
 }
 
 export function resolveCard(instance: CardInstance, library: CardLibrary): ResolvedCard {
@@ -111,16 +134,34 @@ export function resolveCard(instance: CardInstance, library: CardLibrary): Resol
 
   const innateGains = computeInnateGains(definition, level);
   const allocatedGains = computeAllocatedGains(instance.allocation);
+
+  const taken = instance.upgrades.map(upgradeById);
+  const upgradeGains = sumUpgradeStats(taken);
+
   const stats = roundStats({
-    might: definition.baseStats.might + innateGains.might + allocatedGains.might,
-    vitality: definition.baseStats.vitality + innateGains.vitality + allocatedGains.vitality,
-    speed: definition.baseStats.speed + innateGains.speed + allocatedGains.speed,
-    guard: definition.baseStats.guard + innateGains.guard + allocatedGains.guard,
+    might:
+      definition.baseStats.might + innateGains.might + allocatedGains.might + upgradeGains.might,
+    vitality:
+      definition.baseStats.vitality +
+      innateGains.vitality +
+      allocatedGains.vitality +
+      upgradeGains.vitality,
+    speed:
+      definition.baseStats.speed + innateGains.speed + allocatedGains.speed + upgradeGains.speed,
+    guard:
+      definition.baseStats.guard + innateGains.guard + allocatedGains.guard + upgradeGains.guard,
   });
 
   const unlockedSlots = unlockedAbilitySlots(definition, level);
   const unlockedIds = new Set(unlockedSlots.map((slot) => slot.abilityId));
-  const abilities = unlockedSlots.map((slot) => library.getAbility(slot.abilityId));
+  const printedAbilities = unlockedSlots.map((slot) => library.getAbility(slot.abilityId));
+
+  // Upgrades teach abilities on top of the printed ones, which is how a
+  // levelled card ends up doing something its twin does not.
+  const taughtIds = taken
+    .map((upgrade) => upgrade.grantsAbility)
+    .filter((id): id is string => id !== undefined && !unlockedIds.has(id));
+  const abilities = [...printedAbilities, ...taughtIds.map((id) => library.getAbility(id))];
   const lockedAbilities = definition.abilities
     .filter((slot) => !unlockedIds.has(slot.abilityId))
     .map((slot) => library.getAbility(slot.abilityId));
@@ -132,6 +173,19 @@ export function resolveCard(instance: CardInstance, library: CardLibrary): Resol
 
   const pointsEarned = totalGrowthPointsAtLevel(definition.rarity, level);
   const pointsSpent = STAT_KEYS.reduce((total, key) => total + instance.allocation[key], 0);
+
+  const reached = milestonesReached(definition.rarity, level);
+  const pendingUpgrades = Math.max(0, reached - taken.length);
+  const nextMilestone = upgradeMilestones(definition.rarity)[taken.length];
+  const upgradeChoice =
+    pendingUpgrades > 0 && nextMilestone !== undefined
+      ? upgradeChoices(
+          definition.id,
+          nextMilestone,
+          [...unlockedIds, ...taughtIds],
+          instance.upgrades,
+        )
+      : null;
 
   return {
     instance,
@@ -157,6 +211,12 @@ export function resolveCard(instance: CardInstance, library: CardLibrary): Resol
     pointsSpent,
     pointsUnspent: Math.max(0, pointsEarned - pointsSpent),
     nextUnlockLevel: nextAbilityUnlock(definition, level)?.unlockLevel ?? null,
+    upgrades: taken,
+    pendingUpgrades,
+    upgradeChoice,
+    nextUpgradeLevel:
+      upgradeMilestones(definition.rarity).find((milestone) => milestone > level) ?? null,
+    stamina: staminaFor(definition.rarity, level) + sumUpgradeStamina(taken),
   };
 }
 
