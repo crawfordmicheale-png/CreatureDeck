@@ -38,8 +38,13 @@ comes down, which creature swings, and what it swings at.
 - **Drafting.** After each duel you take one of three cards from the whole
   printed set, or cull a card instead. Recruits join at the middle level of
   your warband, so a late draft is still worth taking.
+- **The route.** Twelve rows of branching paths, generated fresh each run.
+  Elites hit harder and pay more XP, waystones buy levels, caches buy cards —
+  and you cannot take them all. Which encounters you meet is the run's first
+  real decision, made before a card is played.
 
-Five duels stand between the starting warband and the Hollow Crown.
+Twelve rows and twenty-eight things living on them stand between the starting
+warband and the crown at the top.
 
 ```bash
 npm install
@@ -49,11 +54,13 @@ npm run build:web      # inlines the art, then bundles engine + UI into web/dist
 Open `web/dist/index.html` in a browser. It is one self-contained file with no
 runtime dependencies — the whole game, engine included, is about 66 kB.
 
-A run is five battles against escalating opponents. Deploy creatures from your
-hand by clicking them, end the turn, and watch combat resolve. Between battles
-your cards earn XP and growth points, and you decide — per card, per stat —
-where those points go. Push a card far enough and it is promoted to a higher
-power tier permanently, which makes it stronger and more expensive to field.
+A run opens on your warband — the starters arrive with growth points already
+banked, and spending them is the first thing you do. From there it is the map:
+pick a node on the row above you, fight or rest or loot what is there, and pick
+again. Between duels your cards earn XP and growth points, and you decide — per
+card, per stat — where those points go. Push a card far enough and it is
+promoted to a higher power tier permanently, which makes it stronger and more
+expensive to field.
 
 The front-end lives in `web/` and only draws the rules. It never decides what
 is legal: every button is built from the engine's own `legalActions`, which is
@@ -68,7 +75,7 @@ Node 22.6+ is the only requirement. There are no runtime dependencies.
 ```bash
 npm install          # only installs TypeScript and @types/node, for typechecking
 npm run demo         # the whole tour
-npm test             # 116 tests
+npm test             # 139 tests
 npm run balance      # archetype win-rate sweep
 ```
 
@@ -77,9 +84,8 @@ The demo runs in four sections, each of which can be run alone:
 ```bash
 npm run demo -- roster        # the printed set, grouped by rarity
 npm run demo -- divergence    # one card, three owners
-npm run demo -- battle        # a full battle, with a play-by-play
-npm run demo -- season        # five battles, XP carried between them
-npm run demo -- battle --verbose --seed 7
+npm run demo -- paths         # the upgrade forks a card is offered
+npm run demo -- run           # a simulated run, node by node
 ```
 
 ## How the systems fit together
@@ -125,17 +131,39 @@ A growth point is worth roughly the same *power score* in any stat, so focusing 
 
 Levels also unlock abilities. Several cards are printed a hair under a tier threshold on purpose, so that unlocking their second ability *is* the promotion.
 
-## Playing a battle
+### The map
 
-Two players, a nexus each (40 health), five board slots. Each round:
+A run is a directed graph of twelve rows climbing toward a boss, generated from
+a seed. Six routes are walked from the bottom row to the top, stepping one
+column left, right or straight at each row, and the union of what those walks
+touched is the map. Generating it that way means every node is on at least one
+complete path, so there is no way to strand yourself — `validateMap` asserts
+exactly that, and the tests run it over two hundred seeds.
 
-1. **Upkeep** — Regrowth and friends tick, then poison bites.
-2. **Draw** — one card, or the opening hand on round 1. An empty deck means escalating fatigue damage.
-3. **Deployment** — each player spends that round's energy. A creature cannot act on the round it lands.
-4. **Combat** — every living creature acts once, fastest first, hitting the front-most enemy (or the nexus, if the board is clear).
-5. **Cleanup** — the dead leave the board, win conditions are checked.
+Node kinds are rolled per node: battles, elites from row two up, waystones
+(XP), caches (a draft) and the boss. Row zero is always plain battles, and the
+row below the boss funnels into it.
 
-Everything routes through a seeded RNG, so a battle replayed with the same decks and seed produces a byte-identical log.
+Encounters come from a bestiary of twenty-eight — seventeen battles across
+three tiers, seven elites and four bosses — so two runs rarely meet the same
+set. Each one is **written for the first row of its tier** and firmed up from
+there: a row deeper into the same tier adds a level and three nexus health per
+step, clamped to each card's rarity cap. Without that ramp the measured
+difficulty sawtooths, because the player levels through a tier and the decks
+written for it do not — the first row of every tier landed on target and the
+last was twenty points too easy.
+
+## Playing a duel
+
+Two players, a nexus each, three lanes a side, three cards in hand. On your
+turn you spend energy to deploy creatures and play effects, then choose which
+of your ready creatures swings and what it swings at. Every attack spends a
+point of stamina; at zero the creature is spent and cycles back through your
+deck. You may attack any enemy creature, but the nexus only through a lane
+with nothing facing your attacker.
+
+Everything routes through a seeded RNG, so a duel replayed with the same decks
+and seed produces a byte-identical log.
 
 ## Project layout
 
@@ -144,16 +172,17 @@ src/core/       rarity, power tiers, stats, scoring, card definitions,
                 card instances, levelling, upgrade paths — no combat logic
 src/duel/       the game: turn state machine, abilities, effects, opponent AI
 src/game/       collections, deck rules, XP rewards, drafting
-src/content/    the printed set and the campaign: creatures, abilities,
-                effect cards, the five stages and the progression curve
+src/game/map.ts the overworld graph: generation, validation, routing
+src/content/    the printed set and the run: creatures, abilities, effect
+                cards, the bestiary of encounters and the progression curve
 src/cli/        the card tour and the balance harness
 web/            the browser front-end and its art, built to one HTML file
-test/           116 tests
+test/           139 tests
 ```
 
-`src/core` knows nothing about battles, and `src/battle` knows nothing about the specific cards — everything takes a `CardLibrary`, so tests run against three-card fixtures and the real game against the full roster.
+`src/core` knows nothing about duels, and `src/duel` knows nothing about the specific cards — everything takes a `CardLibrary`, so tests run against three-card fixtures and the real game against the full roster.
 
-Abilities are split deliberately: `src/core/abilities.ts` holds the metadata (name, description, trigger, weight) and `src/battle/abilityHandlers.ts` holds the behaviour, keyed by the same id. Tooling can price and describe an ability without loading the combat engine, and a test asserts the two halves never drift apart.
+Abilities are split deliberately: `src/core/abilities.ts` holds the metadata (name, description, trigger, weight) and `src/duel/abilities.ts` holds the behaviour, keyed by the same id. Tooling can price and describe an ability without loading the duel engine, and a test asserts the two halves never drift apart.
 
 Runs are saved to the browser as you go, so closing the tab does not lose
 one. A duel in progress restarts from the top; everything between duels — your
@@ -161,35 +190,47 @@ roster, its levels, upgrades and deck — is kept.
 
 ## Balance
 
-`npm run balance` plays whole runs of the shipped campaign with the AI on both
-sides — drafting, levelling and upgrade forks included — and reports how far
-they get against a target curve:
+`npm run balance` walks generated maps with the AI on both sides — routing,
+fighting, drafting, resting and levelling — and reports the per-row win rate
+against a target curve that eases from 82% at the bottom to 50% at the boss:
 
 ```
-  1 The Scavenger Warren     reached  200 won  67% (target 80%)  14 turns  deck 13  14pt too hard
-  2 Brackwater Raiders       reached  133 won  63% (target 70%)   9 turns  deck 14  on target
-  3 The Ashen Kennel         reached   84 won  63% (target 60%)   6 turns  deck 15  on target
-  4 The Gilded Menagerie     reached   53 won  62% (target 60%)   4 turns  deck 16  on target
-  5 The Hollow Crown         reached   33 won  55% (target 45%)   4 turns  deck 17  on target
-  full clears 18/200 (9%)
+Balanced build
+  row  0  fought  400  won  88% (want 82%)   7 turns  on target
+  row  1  fought  264  won  76% (want 79%)  11 turns  on target
+  row  4  fought  141  won  72% (want 70%)   5 turns  on target
+  row  7  fought   52  won  60% (want 61%)   6 turns  on target
+  row  9  fought   38  won  47% (want 55%)   6 turns  on target
+  by node battle 81%  elite 62%  boss 76%
+  clears 16/300 (5%)   average depth 5.4/12
+  hardest The Stormcallers' Eyrie 29%  ·  Harbinger of the Void 35%
 ```
 
-The campaign it measures lives in `src/content/campaign.ts`, not in the
-front-end, so the harness and the game cannot drift apart. It reports three
-development styles, because a curve that only works for one way of spending
-growth points is not balanced.
+The bestiary and the map rules it measures live in `src/content/` and
+`src/game/map.ts`, not in the front-end, so the harness and the game cannot
+drift apart. It reports three development styles, because a curve that only
+works for one way of spending growth points is not balanced.
 
 ### Known balance findings
 
 - **Defence is not a viable style.** The aggressive build clears about a third
-  of runs; the defensive build clears none, and stalls completely by duel four.
-  Stamina is the cause: creatures expire after a few attacks, so there is no
-  way to win by outlasting an opponent, and points spent on Vitality and Guard
-  buy time the creature does not live to use. Fixing this needs a way to
-  recover stamina — a "brace" action that trades an attack for a use and some
-  Guard would give defensive play a win condition it currently lacks.
-- **The opening duel is ~14 points harder than intended** and the longest in
-  the run at 14 turns. Everything after it is on target.
+  of runs; the defensive build clears none, and stalls by row four. Stamina is
+  the cause: creatures expire after a few attacks, so there is no way to win by
+  outlasting an opponent, and points spent on Vitality and Guard buy time the
+  creature does not live to use. Fixing this needs a way to recover stamina — a
+  "brace" action that trades an attack for a use and some Guard would give
+  defensive play a win condition it currently lacks.
+- **Level-1 combat is degenerate.** A creature's lifetime damage (might ×
+  stamina) barely reaches a peer's health, so almost nothing dies, lanes never
+  open and the opening fight grinds to a tiebreak. Starters begin at level 3
+  for that reason; raising the opening row from 33% to 91% took nothing else.
+- **The boss is decided on the board, not at the nexus.** Adding six nexus
+  health to all four bosses moved their win rate by a single point. A player
+  who reaches row eleven has the board, and the nexus falls regardless — a
+  boss that is too soft needs more presence, not more health.
+- **Tempo beats power.** Promotion raises a card's deploy cost, so a stronger
+  warband can be the slower one. The decisive fix for the mid-run wall was
+  raising *starting* energy from 3 to 4; the per-round rate barely mattered.
 - **The AI is a one-turn heuristic.** It never holds a card back and does not
   plan a curve, so these numbers are a floor rather than a ceiling.
 

@@ -1,9 +1,9 @@
 /**
  * The duel: a tactical, player-driven battle.
  *
- * Where the legacy auto-resolver in `src/battle/` played a whole fight by
- * itself, a duel only moves when someone takes an action. The player chooses
- * what to play, which creature swings, and what it swings at.
+ * A duel only moves when someone takes an action: the player chooses what to
+ * play, which creature swings, and what it swings at. Nothing resolves on its
+ * own.
  *
  * Three rules carry the design:
  *   - **Stamina.** Every attack spends one. At zero the creature is spent and

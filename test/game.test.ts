@@ -224,17 +224,24 @@ describe('rewards', () => {
     assert.ok(won.xp > lost.xp);
   });
 
-  it('pays more as the run goes on, because levels cost more', () => {
+  it('pays more the deeper into the map a fight is', () => {
     const { collection, ids } = roster();
-    const early = computeDuelXp(collection, ids, 1, true)[0] as { xp: number };
-    const late = computeDuelXp(collection, ids, 4, true)[0] as { xp: number };
-    assert.ok(late.xp > early.xp * 2, 'the curve should keep pace with rising level costs');
+    const early = computeDuelXp(collection, ids, 0, true)[0] as { xp: number };
+    const late = computeDuelXp(collection, ids, 10, true)[0] as { xp: number };
+    assert.ok(late.xp > early.xp * 3, 'the curve should keep pace with rising level costs');
+  });
+
+  it('pays a premium for an elite', () => {
+    const { collection, ids } = roster();
+    const plain = computeDuelXp(collection, ids, 5, true)[0] as { xp: number };
+    const elite = computeDuelXp(collection, ids, 5, true, true)[0] as { xp: number };
+    assert.ok(elite.xp > plain.xp, 'an elite should be worth the extra risk');
   });
 
   it('applies awards and reports what each card gained', () => {
     const { collection, ids } = roster();
     const before = ids.map((id) => collection.resolve(id).level);
-    const applied = applyXpAwards(collection, computeDuelXp(collection, ids, 1, true));
+    const applied = applyXpAwards(collection, computeDuelXp(collection, ids, 3, true));
 
     assert.equal(applied.length, ids.length);
     assert.ok(applied.every((award) => award.levelsGained > 0));
@@ -243,20 +250,27 @@ describe('rewards', () => {
     for (const id of ids) assert.equal(collection.get(id).battlesFought, 1);
   });
 
-  it('lands a common at roughly level 4, 6, 8 and 10 across a run', () => {
+  it('walks a common up to its cap over a full route, not before', () => {
     const { collection, ids } = roster();
+    const id = ids[0] as string;
     const levels: number[] = [];
-    for (let duel = 1; duel <= 4; duel += 1) {
-      applyXpAwards(collection, computeDuelXp(collection, ids, duel, true));
-      levels.push(collection.resolve(ids[0] as string).level);
+
+    // A route is twelve rows; perhaps nine of them are fights.
+    for (let depth = 0; depth < 12; depth += 1) {
+      if (depth % 4 === 3) continue; // stand in for rest and cache nodes
+      applyXpAwards(collection, computeDuelXp(collection, ids, depth, true));
+      levels.push(collection.resolve(id).level);
     }
-    assert.deepEqual(levels, [4, 6, 8, 10]);
+
+    const half = levels[Math.floor(levels.length / 2)] as number;
+    assert.ok(half >= 4 && half <= 8, `halfway should be mid-levels, got ${half}`);
+    assert.equal(collection.resolve(id).level, 10, 'a common should finish at its cap');
   });
 
   it('autoDevelop takes every pending fork and spends every point', () => {
     const { collection, ids } = roster();
     const id = ids[0] as string;
-    applyXpAwards(collection, computeDuelXp(collection, ids, 3, true));
+    applyXpAwards(collection, computeDuelXp(collection, ids, 6, true));
 
     assert.ok(collection.resolve(id).pendingUpgrades > 0, 'the fixture should have a fork waiting');
     autoDevelop(collection, id, ['might'], true);
@@ -272,7 +286,7 @@ describe('rewards', () => {
     const id = ids[0] as string;
     assert.equal(collection.resolve(id).powerTier, 'weak');
     for (let duel = 1; duel <= 4; duel += 1) {
-      applyXpAwards(collection, computeDuelXp(collection, ids, duel, true));
+      applyXpAwards(collection, computeDuelXp(collection, ids, duel * 3, true));
       autoDevelop(collection, id, ['might', 'vitality'], true);
     }
     const card = collection.resolve(id);

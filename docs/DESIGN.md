@@ -63,17 +63,41 @@ The lesson worth keeping: the cost curve and the energy curve have to be tuned t
 Abilities are split across two files on purpose:
 
 - `src/core/abilities.ts` — id, name, description, trigger, **weight**, and tuning params.
-- `src/battle/abilityHandlers.ts` — the behaviour, keyed by the same id.
+- `src/duel/abilities.ts` — the behaviour, keyed by the same id.
 
 Card tooling, a deck builder, or a collection screen can price and describe an ability without pulling in the combat engine, and the battle layer never needs to know what a card costs. Two tests keep the halves honest: every printed ability must have a handler, and every handler must have a printed ability.
 
-Handlers only ever see a narrow `BattleApi` — they can damage, heal, buff, poison, shield and log, and nothing else. They cannot reorder the round, read the opposing hand, or reach outside the battle. That is what keeps a battle reproducible from its seed.
+Handlers only ever see a narrow `DuelApi` — they can damage, heal, buff, poison, shield and log, and nothing else. They cannot reorder the turn, read the opposing hand, or reach outside the duel. That is what keeps a duel reproducible from its seed.
 
 Weight is the balance dial. An ability that reads as strong must weigh more, or it is free value: weight feeds power score, which feeds tier, which feeds deploy cost. Doublestrike at 20 and Rebirth at 22 are the heaviest; First Strike at 8 is the lightest.
 
 ## Determinism
 
-Every random decision goes through a seeded `mulberry32` stream, forked per player for deck shuffling. `runBattle` with the same decks, controllers and seed produces a byte-identical event log — asserted by a test. This is what makes the balance harness a regression test rather than a vibe check: change a weight and the win-rate table moves in a way you can actually read.
+Every random decision goes through a seeded `mulberry32` stream, forked per player for deck shuffling. A `Duel` driven by the same actions from the same seed produces a byte-identical event log, and `generateMap` returns the same graph for the same seed — both asserted by tests. This is what makes the balance harness a regression test rather than a vibe check: change a weight and the win-rate table moves in a way you can actually read.
+
+## The map
+
+The overworld is a directed graph of rows climbing to a boss, built by walking
+several routes from the bottom row to the top and keeping the union of what
+they touched. Generating it from walks rather than placing nodes and then
+connecting them has one property worth the whole approach: **every node is on
+at least one complete path**, so a player can never route themselves into a
+dead end. `validateMap` asserts reachability, no dead ends and no skipped rows,
+and the tests run it across two hundred seeds.
+
+**Encounters are written, not scaled.** Each of the twenty-eight entries in the
+bestiary is authored for the first row of its tier. The map then firms one up
+by how many rows *into that tier* it sits — a level and three nexus health per
+step, clamped to each card's rarity cap. The ramp exists because measurement
+demanded it: with flat tiers, the first row of every tier landed on target and
+the last was twenty points too easy, because the player levels through a tier
+and the decks written for it do not. A bounded step is the smallest thing that
+removes the sawtooth without inventing stat lines nobody balanced.
+
+**Node kinds are rolled, not placed.** Row zero is always plain battles and
+elites cannot appear before row two, because an opening the starting warband
+cannot win is not a difficulty curve. The row below the boss funnels into it,
+so the boss is always the last thing fought.
 
 ## Known problems
 
@@ -83,4 +107,8 @@ Every random decision goes through a seeded `mulberry32` stream, forked per play
 
 **Mirror matches still draw often.** The board-strength tiebreak helped but symmetric decks remain prone to symmetric outcomes.
 
-**Nothing is persisted.** A `Collection` lives in memory. Serialisation is deliberately absent rather than half-done — `CardInstance` is a flat, plain-data record specifically so that adding it later is trivial.
+**Defence has no win condition.** Stamina means creatures expire after a few attacks, so there is no way to win by outlasting an opponent: points spent on Vitality and Guard buy time the creature does not live to use. The defensive build clears none of two hundred runs. This needs a mechanic, not a number — a "brace" action trading an attack for a stamina point and some Guard is the obvious candidate, and is not built.
+
+**The boss is decided on the board.** Adding nexus health to a boss moves its win rate by about a point: a player who has reached the top row has the board, and the nexus falls regardless. Tuning a boss means giving it more presence, not more health, which the current authoring makes awkward.
+
+**Runs persist, duels do not.** Everything between duels — roster, levels, upgrades, deck, the map seed and where you stand on it — is saved to browser storage. A duel in progress restarts from the top, because serialising a live duel would mean versioning the whole engine state for very little gain.

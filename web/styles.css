@@ -471,3 +471,161 @@ button:focus-visible { outline: 2px solid var(--you); outline-offset: 2px; }
   color: var(--ink-dim); border: 1px solid var(--line); border-radius: 2px; padding: 1px 5px;
 }
 .entry.pending { border-color: var(--you); background: #16141a; }
+
+/* ------------------------------------------------------------------- map */
+/* The graph is laid out purely in percentages against a container whose
+   height is set from the row count, and the edge SVG uses a viewBox in grid
+   units over the same box. Node centres and line endpoints are therefore the
+   same arithmetic and cannot drift apart as the viewport changes. */
+
+.mapwrap { padding: 20px 0 48px; }
+
+.maplegend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  margin: 10px 0 20px;
+  color: var(--ink-faint);
+  font-size: 11.5px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+.maplegend span { display: inline-flex; align-items: center; gap: 7px; }
+.maplegend .sw {
+  width: 10px;
+  height: 10px;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+}
+
+.mapgraph {
+  position: relative;
+  height: calc(var(--map-rows, 12) * 92px);
+  min-height: 420px;
+}
+
+.mapedges {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+.mapedges .edge {
+  stroke: var(--line);
+  stroke-width: 1.5;
+  stroke-dasharray: 3 5;
+}
+.mapedges .edge.live {
+  stroke: var(--you);
+  stroke-width: 2;
+  stroke-dasharray: none;
+  opacity: 0.75;
+}
+
+.mapnode {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: 78px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ink-dim);
+  font: inherit;
+  cursor: default;
+}
+
+.mapnode .face {
+  display: grid;
+  place-items: center;
+  width: 46px;
+  height: 46px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: var(--surface);
+  transition: border-color 120ms, box-shadow 120ms, filter 120ms;
+}
+.mapnode .face img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  /* The set is painted dark on purpose, so dimming on top of it buries the
+     portrait entirely. Locked nodes are desaturated and *lifted*, because
+     reading the route ahead is the decision the map exists to offer. */
+  filter: grayscale(0.55) brightness(1.35) contrast(1.1);
+  transition: filter 120ms;
+}
+.mapnode .glyph { font-size: 19px; line-height: 1; }
+.mapnode .tag {
+  font-size: 9.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  opacity: 0.8;
+}
+
+/* Kind reads as colour on the rim, so the shape stays legible when the
+   portrait is dark — which, in this set, it usually is. */
+.mapnode.k-elite .face {
+  border-color: #a2707c;
+  box-shadow: inset 0 0 0 2px rgba(10, 11, 15, 0.9), 0 0 0 2px rgba(162, 112, 124, 0.3);
+}
+.mapnode.k-boss .face {
+  border-color: var(--blood);
+  border-width: 2px;
+  width: 58px;
+  height: 58px;
+  box-shadow: 0 0 0 3px rgba(142, 47, 42, 0.22);
+}
+.mapnode.k-rest .face { border-color: #5f7a5c; color: var(--good); }
+.mapnode.k-cache .face { border-color: #8a7444; color: var(--tier-legendary); }
+.maplegend .k-battle { color: var(--ink-dim); }
+.maplegend .k-elite { color: #a2707c; }
+.maplegend .k-boss { color: var(--blood); }
+.maplegend .k-rest { color: var(--good); }
+.maplegend .k-cache { color: var(--tier-legendary); }
+
+/* Behind you: visibly spent, and still readable as what it was. */
+.mapnode.been { opacity: 0.45; }
+.mapnode.been .face { border-style: dashed; }
+.mapnode.been .face img { filter: grayscale(1) brightness(0.9); }
+
+.mapnode.here .face {
+  border-color: var(--you);
+  box-shadow: 0 0 0 3px rgba(194, 112, 58, 0.18);
+}
+.mapnode.here .face img { filter: brightness(1.15) contrast(1.05); }
+.mapnode.here { opacity: 1; color: var(--you); }
+
+.mapnode.open {
+  cursor: pointer;
+  color: var(--ink);
+  opacity: 1;
+}
+.mapnode.open .face {
+  background: var(--raised);
+  box-shadow: 0 0 0 1px rgba(222, 215, 201, 0.12), 0 6px 18px rgba(0, 0, 0, 0.45);
+}
+.mapnode.open .face img { filter: brightness(1.15) contrast(1.05); }
+.mapnode.open .tag { opacity: 1; }
+.mapnode.open:hover .face,
+.mapnode.open:focus-visible .face {
+  border-color: var(--ink);
+  filter: brightness(1.12);
+}
+.mapnode.open:hover .face img,
+.mapnode.open:focus-visible .face img { filter: brightness(1.3) contrast(1.05); }
+
+.mapnode:disabled { pointer-events: none; }
+
+@media (max-width: 620px) {
+  .mapgraph { height: calc(var(--map-rows, 12) * 76px); }
+  .mapnode { width: 58px; }
+  .mapnode .face { width: 38px; height: 38px; }
+  .mapnode.k-boss .face { width: 48px; height: 48px; }
+  .mapnode .tag { display: none; }
+}

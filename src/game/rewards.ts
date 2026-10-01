@@ -32,10 +32,11 @@ export interface AppliedAward extends XpAward {
 export function computeDuelXp(
   collection: Collection,
   instanceIds: readonly string[],
-  duelNumber: number,
+  depth: number,
   won: boolean,
+  elite = false,
 ): readonly XpAward[] {
-  const xp = duelXp(duelNumber, won);
+  const xp = duelXp(depth, won, elite);
   return instanceIds.map((instanceId) => ({
     instanceId,
     name: collection.resolve(instanceId).displayName,

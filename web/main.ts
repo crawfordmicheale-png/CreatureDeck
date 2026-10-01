@@ -56,11 +56,16 @@ function art(id: string): string {
 import {
   MIN_CREATURES,
   MIN_DECK,
-  STAGES,
   STARTER_EFFECTS,
+  STARTER_LEVEL,
   STARTER_ROSTER,
+  restXp,
 } from '../src/content/campaign.ts';
-import type { AiProfileName, Stage } from '../src/content/campaign.ts';
+import type { AiProfileName } from '../src/content/campaign.ts';
+import { encounterById, scaleEncounter } from '../src/content/encounters.ts';
+import type { Encounter } from '../src/content/encounters.ts';
+import { availableMoves, depthStep, generateMap, nodeAt } from '../src/game/map.ts';
+import type { GameMap, MapNode, NodeKind } from '../src/game/map.ts';
 
 /** The campaign names a profile; this maps it to the opponent's policy. */
 const AI_PROFILES: Record<AiProfileName, AiProfile> = {
@@ -72,16 +77,38 @@ const AI_PROFILES: Record<AiProfileName, AiProfile> = {
 // --------------------------------------------------------------------- state
 
 interface RunState {
-  stage: number;
+  /** The map is regenerated from this, so a save never stores the graph. */
+  mapSeed: number;
+  map: GameMap;
+  /** The node the warband is standing on; null before the first move. */
+  current: string | null;
+  /** The node being fought right now, so a reload resumes the same fight. */
+  pending: string | null;
+  /** Nodes resolved, in the order they were taken. */
+  visited: string[];
   collection: Collection;
   /** Creature instance ids in the deck. */
   roster: string[];
   /** Effect card ids in the deck; duplicates are allowed. */
   effects: string[];
   wins: number;
-  /** Drafts derive their randomness from this plus the stage, so a saved run
+  /** Drafts derive their randomness from this plus the depth, so a saved run
    *  can be restored without serialising a generator. */
   seed: number;
+}
+
+/** The level cap of a card's rarity, for firming an encounter up by depth. */
+const capOf = (definitionId: string): number =>
+  rarityProfile(library.getCard(definitionId).rarity).maxLevel;
+
+/** The encounter at a node, firmed up for how deep into its tier it sits. */
+function encounterAt(state: RunState, nodeId: string): Encounter {
+  const node = nodeAt(state.map, nodeId);
+  return scaleEncounter(
+    encounterById(node.encounterId as string),
+    depthStep(node.row, state.map.rows),
+    capOf,
+  );
 }
 
 let run: RunState | null = null;
@@ -92,11 +119,14 @@ let pendingEffect: HandSnapshot | null = null;
 let busy = false;
 let helpDismissed = false;
 
-const SAVE_KEY = 'creaturedeck.run.v1';
+const SAVE_KEY = 'creaturedeck.run.v2';
 
 interface SavedRun {
-  readonly version: 1;
-  readonly stage: number;
+  readonly version: 2;
+  readonly mapSeed: number;
+  readonly current: string | null;
+  readonly pending: string | null;
+  readonly visited: readonly string[];
   readonly wins: number;
   readonly seed: number;
   readonly effects: readonly string[];
@@ -125,8 +155,11 @@ function saveRun(): void {
   if (!state) return;
   try {
     const payload: SavedRun = {
-      version: 1,
-      stage: state.stage,
+      version: 2,
+      mapSeed: state.mapSeed,
+      current: state.current,
+      pending: state.pending,
+      visited: state.visited,
       wins: state.wins,
       seed: state.seed,
       effects: state.effects,
@@ -168,7 +201,7 @@ function loadRun(): RunState | null {
     return null;
   }
 
-  if (payload?.version !== 1 || !Array.isArray(payload.roster) || payload.roster.length === 0) {
+  if (payload?.version !== 2 || !Array.isArray(payload.roster) || payload.roster.length === 0) {
     return null;
   }
 
@@ -189,8 +222,19 @@ function loadRun(): RunState | null {
     });
     const effects = payload.effects.filter((id) => EFFECTS.some((e) => e.id === id));
 
+    // The map comes back from its seed. A node id the generator no longer
+    // produces means the rules changed under the save, so start over rather
+    // than drop the warband somewhere that does not exist.
+    const map = generateMap(payload.mapSeed);
+    const known = (id: string | null): boolean => id === null || map.nodes.has(id);
+    if (!known(payload.current) || !known(payload.pending)) return null;
+
     return {
-      stage: Math.max(0, Math.min(payload.stage, STAGES.length - 1)),
+      mapSeed: payload.mapSeed,
+      map,
+      current: payload.current ?? null,
+      pending: payload.pending ?? null,
+      visited: (payload.visited ?? []).filter((id) => map.nodes.has(id)),
       collection,
       roster,
       effects: [...effects],
@@ -215,10 +259,15 @@ function show(screen: string): void {
 function newRun(): RunState {
   const collection = new Collection(library);
   const roster = STARTER_ROSTER.map(([definitionId, nickname]) =>
-    collection.add(definitionId, { nickname }).instanceId,
+    collection.add(definitionId, { nickname, level: STARTER_LEVEL }).instanceId,
   );
+  const mapSeed = seedFromString(`map-${Date.now()}-${Math.random()}`);
   return {
-    stage: 0,
+    mapSeed,
+    map: generateMap(mapSeed),
+    current: null,
+    pending: null,
+    visited: [],
     collection,
     roster,
     effects: [...STARTER_EFFECTS],
@@ -236,53 +285,212 @@ function playerDeck(state: RunState): { deck: DeckEntry[]; instances: CardInstan
   return { deck, instances };
 }
 
-function opponentDeck(stage: Stage): { deck: DeckEntry[]; instances: CardInstance[] } {
+function opponentDeck(encounter: Encounter): { deck: DeckEntry[]; instances: CardInstance[] } {
   const foe = new Collection(library);
   const instances: CardInstance[] = [];
   const deck: DeckEntry[] = [];
 
-  for (const entry of stage.creatures) {
+  for (const entry of encounter.creatures) {
     const instance = foe.add(entry.definitionId, { level: entry.level });
     foe.autoAllocate(instance.instanceId, entry.focus);
     instances.push(foe.get(instance.instanceId));
     deck.push({ kind: 'creature', instanceId: instance.instanceId });
   }
-  for (const effectId of stage.effects) deck.push({ kind: 'effect', effectId });
+  for (const effectId of encounter.effects) deck.push({ kind: 'effect', effectId });
 
   return { deck, instances };
+}
+
+// ----------------------------------------------------------------- the map
+
+const NODE_GLYPH: Record<NodeKind, string> = {
+  battle: '',
+  elite: '',
+  rest: '\u2698',
+  cache: '\u25C6',
+  boss: '',
+};
+
+const NODE_LABEL: Record<NodeKind, string> = {
+  battle: 'Battle',
+  elite: 'Elite',
+  rest: 'Waystone',
+  cache: 'Cache',
+  boss: 'Boss',
+};
+
+/** What a node is, in a sentence, for the panel under the map. */
+function nodeDescription(state: RunState, node: MapNode): { name: string; blurb: string } {
+  if (node.kind === 'rest') {
+    return {
+      name: 'A waystone',
+      blurb:
+        'No fight here. The warband rests, takes the experience it has been carrying, ' +
+        'and you spend what that earns.',
+    };
+  }
+  if (node.kind === 'cache') {
+    return {
+      name: 'A cache',
+      blurb: 'Someone left something behind. Take a card into the deck, or cut one loose.',
+    };
+  }
+  const encounter = encounterAt(state, node.id);
+  return { name: encounter.name, blurb: encounter.blurb };
+}
+
+function showMap(): void {
+  const state = run;
+  if (!state) return;
+  duel = null;
+  renderMap();
+  show('screen-map');
+}
+
+function renderMap(): void {
+  const state = run;
+  if (!state) return;
+  const { map } = state;
+  const open = new Set(availableMoves(map, state.current));
+  const taken = new Set(state.visited);
+
+  const depth = state.current === null ? 0 : nodeAt(map, state.current).row + 1;
+  el('map-depth').textContent = `Row ${Math.min(depth + 1, map.rows)} of ${map.rows}`;
+  el('map-deck').textContent =
+    `${state.roster.length} creatures · ${state.effects.length} effects`;
+  const ways = (map.byRow[0] ?? []).length;
+  el('map-hint').textContent =
+    state.current === null
+      ? `${ways} ways in. Every route ends at the same crown — what you meet on the way is yours to choose.`
+      : 'One row at a time. Pick what you would rather fight.';
+
+  // Lines first, in grid units, so node positions and edges cannot disagree.
+  /* The boss lives at column 0 so its id is stable, but every route funnels
+     into it. Drawn where it sits, that funnel reads as a fan of diagonals
+     across the whole map; drawn centred, it reads as the funnel it is. */
+  const centreOf = (node: MapNode): number =>
+    node.kind === 'boss' ? map.columns / 2 : node.column + 0.5;
+  const middleOf = (node: MapNode): number => map.rows - 0.5 - node.row;
+
+  const edges: string[] = [];
+  for (const node of map.nodes.values()) {
+    for (const exitId of node.exits) {
+      const exit = nodeAt(map, exitId);
+      const live = state.current === node.id || (taken.has(node.id) && taken.has(exitId));
+      edges.push(
+        `<line x1="${centreOf(node)}" y1="${middleOf(node)}" ` +
+          `x2="${centreOf(exit)}" y2="${middleOf(exit)}" ` +
+          `class="${live ? 'edge live' : 'edge'}" vector-effect="non-scaling-stroke"></line>`,
+      );
+    }
+  }
+
+  const nodes = [...map.nodes.values()].map((node) => {
+    const here = state.current === node.id;
+    const reachable = open.has(node.id);
+    const been = taken.has(node.id);
+    const classes = ['mapnode', `k-${node.kind}`];
+    if (here) classes.push('here');
+    if (been && !here) classes.push('been');
+    if (reachable) classes.push('open');
+    const portrait = node.encounterId ? art(encounterById(node.encounterId).art) : '';
+    const described = nodeDescription(state, node);
+
+    return `<button class="${classes.join(' ')}" ${reachable ? '' : 'disabled'}
+        data-node="${esc(node.id)}"
+        style="left:${(centreOf(node) / map.columns) * 100}%;top:${
+          (middleOf(node) / map.rows) * 100
+        }%"
+        title="${esc(`${NODE_LABEL[node.kind]} — ${described.name}`)}">
+        <span class="face">${
+          portrait ? `<img src="${portrait}" alt="">` : `<span class="glyph">${NODE_GLYPH[node.kind]}</span>`
+        }</span>
+        <span class="tag">${esc(NODE_LABEL[node.kind])}</span>
+      </button>`;
+  });
+
+  el('map-graph').style.setProperty('--map-rows', String(map.rows));
+  el('map-graph').innerHTML =
+    `<svg class="mapedges" viewBox="0 0 ${map.columns} ${map.rows}" preserveAspectRatio="none" aria-hidden="true">${edges.join(
+      '',
+    )}</svg>` + nodes.join('');
+}
+
+/** Moves onto a node and resolves whatever is there. */
+function enterNode(id: string): void {
+  const state = run;
+  if (!state) return;
+  if (!availableMoves(state.map, state.current).includes(id)) return;
+
+  const node = nodeAt(state.map, id);
+
+  if (node.kind === 'rest' || node.kind === 'cache') {
+    state.current = id;
+    state.pending = null;
+    state.visited.push(id);
+
+    if (node.kind === 'rest') {
+      const before = new Map<string, string>();
+      for (const instanceId of state.roster) {
+        before.set(instanceId, state.collection.resolve(instanceId).powerTier);
+      }
+      applyXpAwards(
+        state.collection,
+        state.roster.map((instanceId) => ({
+          instanceId,
+          name: state.collection.resolve(instanceId).displayName,
+          xp: restXp(node.row),
+        })),
+      );
+      promotedFrom = before;
+      saveRun();
+      showLevelUp('The warband rests', 'Experience carried this far, spent here.');
+      return;
+    }
+
+    saveRun();
+    showDraft('A cache, broken open');
+    return;
+  }
+
+  state.pending = id;
+  saveRun();
+  startDuel();
 }
 
 // -------------------------------------------------------------------- battle
 
 function startDuel(): void {
   const state = run;
-  if (!state) return;
-  const stage = STAGES[state.stage] as Stage;
+  if (!state || state.pending === null) return;
+  const node = nodeAt(state.map, state.pending);
+  const encounter = encounterAt(state, state.pending);
 
   const mine = playerDeck(state);
-  const theirs = opponentDeck(stage);
+  const theirs = opponentDeck(encounter);
 
   duel = new Duel(
     [
       { id: 'p1', name: 'Your warband', deck: mine.deck },
-      { id: 'p2', name: stage.name, deck: theirs.deck },
+      { id: 'p2', name: encounter.name, deck: theirs.deck },
     ],
     library,
     EFFECT_BY_ID,
     [...mine.instances, ...theirs.instances],
-    { seed: 1700 + state.stage * 131, nexusHealth: stage.nexusHealth },
+    { seed: 1700 + seedFromString(node.id) % 9973, nexusHealth: encounter.nexusHealth },
   );
 
   selectedUid = null;
   pendingEffect = null;
   busy = false;
 
-  el('stage-name').textContent = stage.name;
-  el('stage-count').textContent = `Duel ${state.stage + 1} of ${STAGES.length}`;
+  el('stage-name').textContent = encounter.name;
+  el('stage-count').textContent =
+    `${NODE_LABEL[node.kind]} · row ${node.row + 1} of ${state.map.rows}`;
   el('log').innerHTML = '';
 
   const panel = el('help');
-  panel.hidden = state.stage === 0 ? helpDismissed : true;
+  panel.hidden = state.visited.length === 0 ? helpDismissed : true;
   el('help-toggle').setAttribute('aria-expanded', String(!panel.hidden));
 
   snapshot = duel.snapshot();
@@ -312,9 +520,16 @@ function act(action: Parameters<Duel['apply']>[0]): void {
   });
 }
 
+/** The temperament of whatever is being fought right now. */
+function opposingProfile(): AiProfile {
+  const state = run;
+  if (!state || state.pending === null) return STEADY;
+  return AI_PROFILES[encounterAt(state, state.pending).profile];
+}
+
 function runOpponentTurn(): void {
   if (!duel) return;
-  const stage = STAGES[run?.stage ?? 0] as Stage;
+  const profile = opposingProfile();
   busy = true;
   render();
 
@@ -333,7 +548,7 @@ function runOpponentTurn(): void {
       return;
     }
 
-    const action = chooseAction(duel, AI_PROFILES[stage.profile]);
+    const action = chooseAction(duel, profile);
     const events = duel.apply(action);
     snapshot = duel.snapshot();
     playEvents(events, step);
@@ -664,16 +879,20 @@ function finishDuel(): void {
   const result = duel.result;
   if (!result) return;
 
+  const fought = state.pending;
+  if (fought === null) return;
+  const node = nodeAt(state.map, fought);
+  const encounter = encounterAt(state, fought);
+
   const won = result.winner === 'p1';
   if (won) state.wins += 1;
 
   const before = new Map<string, string>();
   for (const id of state.roster) before.set(id, state.collection.resolve(id).powerTier);
 
-  // `state.stage` is still the duel just fought; it advances below.
   applyXpAwards(
     state.collection,
-    computeDuelXp(state.collection, state.roster, state.stage + 1, won),
+    computeDuelXp(state.collection, state.roster, node.row, won, node.kind === 'elite'),
   );
   promotedFrom = before;
 
@@ -681,18 +900,22 @@ function finishDuel(): void {
 
   if (!won) {
     clearRun();
-    showOutcome(false, result.turns);
+    showOutcome(false, result.turns, encounter.name, node.row);
     return;
   }
-  state.stage += 1;
-  if (state.stage >= STAGES.length) {
-    clearRun();
-    showOutcome(true, result.turns);
-    return;
-  }
+
+  state.current = fought;
+  state.pending = null;
+  state.visited.push(fought);
   lastTurns = result.turns;
+
+  if (node.kind === 'boss') {
+    clearRun();
+    showOutcome(true, result.turns, encounter.name, node.row);
+    return;
+  }
   saveRun();
-  showDraft();
+  showDraft(`${encounter.name} broken`);
 }
 
 // ------------------------------------------------------------------- draft
@@ -712,18 +935,24 @@ function deckCopies(state: RunState): Map<string, number> {
   return copies;
 }
 
-function showDraft(): void {
+function showDraft(headline: string): void {
   const state = run;
   if (!state) return;
 
-  offers = rollDraft(createRng(state.seed + state.stage * 7919), library, EFFECTS, {
-    rosterLevels: state.roster.map((id) => state.collection.resolve(id).level),
-    copies: deckCopies(state),
-  });
+  offers = rollDraft(
+    createRng(state.seed + state.visited.length * 7919),
+    library,
+    EFFECTS,
+    {
+      rosterLevels: state.roster.map((id) => state.collection.resolve(id).level),
+      copies: deckCopies(state),
+    },
+  );
 
-  el('draft-head').textContent = `${STAGES[state.stage - 1]?.name ?? ''} broken`;
-  el('draft-sub').textContent =
-    `${lastTurns} turns. Your deck holds ${state.roster.length + state.effects.length} cards.`;
+  el('draft-head').textContent = headline;
+  el('draft-sub').textContent = `Your deck holds ${
+    state.roster.length + state.effects.length
+  } cards.`;
   el('cull-pane').hidden = true;
   el('cull-toggle').textContent = 'Cull a card instead';
 
@@ -833,7 +1062,7 @@ function takeOption(id: string): void {
     state.effects.push(option.effectId);
   }
   saveRun();
-  showLevelUp(lastTurns);
+  showLevelUp('Spoils taken', 'Spend what the warband has earned.');
 }
 
 function cutCard(kind: 'creature' | 'effect', key: string): void {
@@ -853,20 +1082,25 @@ function cutCard(kind: 'creature' | 'effect', key: string): void {
     state.effects.splice(at, 1);
   }
   saveRun();
-  showLevelUp(lastTurns);
+  showLevelUp('A leaner deck', 'Spend what the warband has earned.');
 }
 
 let promotedFrom = new Map<string, string>();
 
-function showLevelUp(turns: number): void {
+function showLevelUp(headline: string, subtitle: string): void {
   const state = run;
   if (!state) return;
-  const next = STAGES[state.stage] as Stage;
 
-  el('levelup-head').textContent = `${STAGES[state.stage - 1]?.name ?? ''} broken`;
-  el('levelup-sub').textContent = `${turns} turns. Spend what your warband earned, then face ${next.name}.`;
-  el('next-name').textContent = next.name;
-  el('next-blurb').textContent = next.blurb;
+  el('levelup-head').textContent = headline;
+  el('levelup-sub').textContent = subtitle;
+
+  // What the map offers next, so the points are spent against something.
+  const ahead = availableMoves(state.map, state.current).map((id) => {
+    const node = nodeAt(state.map, id);
+    return `${NODE_LABEL[node.kind]} — ${nodeDescription(state, node).name}`;
+  });
+  el('next-name').textContent = ahead.length === 1 ? 'The only way on' : `${ahead.length} ways on`;
+  el('next-blurb').textContent = ahead.join(' · ');
 
   renderRoster();
   show('screen-levelup');
@@ -1001,14 +1235,16 @@ function upgradeMilestonesFor(card: { level: number; upgrades: readonly unknown[
   return (card.upgrades.length + 1) * 4;
 }
 
-function showOutcome(victory: boolean, turns: number): void {
+function showOutcome(victory: boolean, turns: number, against: string, row: number): void {
   const state = run;
   if (!state) return;
 
-  el('outcome-title').textContent = victory ? 'The Hollow Crown falls' : 'Your warband is broken';
+  el('outcome-title').textContent = victory ? `${against} falls` : 'Your warband is broken';
   el('outcome-sub').textContent = victory
-    ? `All ${STAGES.length} duels taken. Every creature below began identical to the one beside it.`
-    : `You took ${state.wins} of ${STAGES.length}. The run ends here.`;
+    ? 'The climb is finished. Every creature below began identical to the one beside it.'
+    : `${against} stopped you at row ${row + 1} of ${state.map.rows}, ${state.wins} fight${
+        state.wins === 1 ? '' : 's'
+      } taken.`;
   el('outcome-turns').textContent = `The last duel lasted ${turns} turns.`;
 
   el('tally').innerHTML = state.roster
@@ -1030,6 +1266,13 @@ function showOutcome(victory: boolean, turns: number): void {
 // --------------------------------------------------------------------- wiring
 
 function onProgressionClick(event: MouseEvent): void {
+  const step = (event.target as HTMLElement).closest<HTMLElement>('[data-node]');
+  if (step) {
+    const id = step.getAttribute('data-node');
+    if (id) enterNode(id);
+    return;
+  }
+
   const node = (event.target as HTMLElement).closest<HTMLElement>(
     '[data-take],[data-cut-creature],[data-cut-effect],[data-upgrade]',
   );
@@ -1085,33 +1328,54 @@ function onProgressionClick(event: MouseEvent): void {
   renderRoster();
 }
 
+/**
+ * A run opens on the warband, not the map.
+ *
+ * Starters arrive with growth points already banked, and the balance figures
+ * assume they get spent. Dropping the player straight onto the map sends them
+ * into the first fight carrying forty unspent points, which is a noticeably
+ * weaker warband than anything that was ever measured.
+ */
+function startFreshRun(): void {
+  clearRun();
+  run = newRun();
+  promotedFrom = new Map();
+  saveRun();
+  showLevelUp(
+    'Ten creatures, none of them finished',
+    'Every one starts with points banked. Spend them — then choose your way in.',
+  );
+}
+
 function boot(): void {
   document.addEventListener('click', onClick);
   document.addEventListener('click', onProgressionClick);
 
   const saved = loadRun();
   if (saved) {
+    const row = saved.current === null ? 0 : nodeAt(saved.map, saved.current).row + 1;
     const resume = el('resume');
     resume.hidden = false;
-    resume.textContent = `Continue run — duel ${saved.stage + 1} of ${STAGES.length}`;
+    resume.textContent = `Continue run — row ${row + 1} of ${saved.map.rows}`;
     resume.addEventListener('click', () => {
       run = loadRun();
-      if (run) startDuel();
+      if (!run) return;
+      // A run saved mid-fight resumes that fight; anywhere else, the map.
+      if (run.pending !== null) startDuel();
+      else showMap();
     });
   }
 
-  el('begin').addEventListener('click', () => {
-    clearRun();
-    run = newRun();
-    startDuel();
+  el('begin').addEventListener('click', startFreshRun);
+  el('map-warband').addEventListener('click', () => {
+    if (!run) return;
+    // The same screen, reached without a node behind it: you look at the
+    // warband *before* committing to a route, which is when it matters.
+    showLevelUp('Your warband', 'Spend anything unspent, then pick your route.');
   });
   el('end-turn').addEventListener('click', () => act({ type: 'end-turn' }));
-  el('next-duel').addEventListener('click', startDuel);
-  el('again').addEventListener('click', () => {
-    clearRun();
-    run = newRun();
-    startDuel();
-  });
+  el('next-duel').addEventListener('click', showMap);
+  el('again').addEventListener('click', startFreshRun);
   el('cull-toggle').addEventListener('click', () => {
     const pane = el('cull-pane');
     const opening = pane.hidden;

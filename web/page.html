@@ -39,13 +39,42 @@
         <h3>The deck grows with you</h3>
         <p>After each duel you draft a card from the whole set, or cut one loose. Recruits arrive at the level of the warband they join.</p>
       </div>
+      <div>
+        <h3>The route is a choice</h3>
+        <p>Twelve rows of branching paths. Elites hit harder and pay better, waystones buy you levels, caches buy you cards. You cannot take them all.</p>
+      </div>
     </div>
 
     <div class="actions">
       <button class="primary" id="begin">Begin a new run</button>
       <button id="resume" hidden>Continue run</button>
-      <span class="hint">Five duels stand between you and the Hollow Crown.</span>
+      <span class="hint">Twelve rows, twenty-eight things living on them, and one crown at the top.</span>
     </div>
+  </div>
+</section>
+
+<!-- ---------------------------------------------------------------- map -->
+<section class="screen" id="screen-map">
+  <div class="topbar">
+    <div class="wrap bar-inner">
+      <span class="stage">The climb</span>
+      <span class="hint num" id="map-depth"></span>
+      <span class="grow"></span>
+      <span class="hint num" id="map-deck"></span>
+      <button id="map-warband">Warband</button>
+    </div>
+  </div>
+
+  <div class="wrap mapwrap">
+    <p class="hint" id="map-hint"></p>
+    <div class="maplegend">
+      <span><i class="sw k-battle"></i>Battle</span>
+      <span><i class="sw k-elite"></i>Elite — harder, pays more</span>
+      <span><i class="sw k-rest"></i>Waystone — levels</span>
+      <span><i class="sw k-cache"></i>Cache — a card</span>
+      <span><i class="sw k-boss"></i>Boss</span>
+    </div>
+    <div class="mapgraph" id="map-graph"></div>
   </div>
 </section>
 
@@ -137,7 +166,7 @@
       <strong id="points-left">—</strong>
       <span class="grow"></span>
       <span class="hint" id="upgrade-nag" hidden>Choose every path before moving on.</span>
-      <button class="primary" id="next-duel">Next duel</button>
+      <button class="primary" id="next-duel">To the map</button>
     </div>
   </div>
 

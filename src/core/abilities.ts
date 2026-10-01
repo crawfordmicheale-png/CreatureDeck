@@ -1,6 +1,6 @@
 /**
  * Ability *metadata*. The battle-time behaviour lives in
- * `src/battle/abilityHandlers.ts`, keyed by the same ids.
+ * `src/duel/abilities.ts`, keyed by the same ids.
  *
  * Keeping the two apart means the card layer can price and describe an ability
  * — including in tooling that never runs a battle — without dragging the whole

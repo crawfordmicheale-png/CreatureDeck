@@ -11,7 +11,6 @@
  * inspected without one.
  */
 
-import { STAGES } from '../content/campaign.ts';
 import { STANDARD_LIBRARY } from '../content/index.ts';
 import { resolveCard } from '../core/cardInstance.ts';
 import { trainTo } from '../core/leveling.ts';
@@ -124,22 +123,24 @@ function showPaths(): void {
 function showRun(options: Options): void {
   console.log(heading('A simulated run'));
   console.log(
-    paint('Both sides played by the AI, so this is about the decks rather than the piloting.\n', 'dim'),
+    paint('Both sides played by the AI, so this is about the decks and the route.\n', 'dim'),
   );
 
   const outcome = simulateRun(library, { seed: options.seed, style: BALANCED_STYLE });
-  for (const duel of outcome.duels) {
-    const verdict = duel.won ? paint('won ', 'green') : paint('lost', 'red');
+  for (const fight of outcome.fights) {
+    const verdict = fight.won ? paint('won ', 'green') : paint('lost', 'red');
+    const kind = fight.kind === 'elite' ? paint('elite', 'yellow') : fight.kind;
     console.log(
-      `  ${duel.stage + 1} ${duel.stageName.padEnd(24)} ${verdict}` +
-        `  ${String(duel.turns).padStart(2)} turns` +
-        `  nexus ${duel.playerNexus}–${duel.enemyNexus}` +
-        `  deck ${duel.playerDeckSize}`,
+      `  row ${String(fight.depth).padStart(2)} ${kind.padEnd(6)} ` +
+        `${fight.encounterName.padEnd(26)} ${verdict}` +
+        `  ${String(fight.turns).padStart(2)} turns  deck ${fight.deckSize}`,
     );
   }
   console.log(
     paint(
-      `\n  ${outcome.stagesWon} of ${STAGES.length} taken; deck ended at ` +
+      `\n  Route: ${outcome.visited.join(' -> ')}\n` +
+        `  Reached row ${outcome.depthReached + 1} of 12; ` +
+        `${outcome.cleared ? 'cleared' : 'fell short'}. Deck ended at ` +
         `${outcome.finalCreatures} creatures and ${outcome.finalEffects} effects.`,
       'dim',
     ),

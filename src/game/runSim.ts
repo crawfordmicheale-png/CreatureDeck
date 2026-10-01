@@ -1,25 +1,31 @@
 /**
  * Run simulator.
  *
- * Plays the shipped campaign end to end with the AI on both sides — including
- * drafting, levelling and upgrade forks — so the balance harness measures the
- * game rather than an idealised version of it. The AI playing both sides means
- * a result reflects the *decks*, not how well anyone piloted them.
+ * Walks a generated map end to end with the AI on both sides — routing,
+ * fighting, drafting, resting and levelling — so the balance harness measures
+ * the game rather than an idealised version of it. The AI playing both sides
+ * means a result reflects the *decks and the route*, not how well anyone
+ * piloted them.
  */
 
 import {
   MIN_CREATURES,
   MIN_DECK,
-  STAGES,
   STARTER_EFFECTS,
+  STARTER_LEVEL,
   STARTER_ROSTER,
+  duelXp,
+  restXp,
 } from '../content/campaign.ts';
-import type { AiProfileName, Stage } from '../content/campaign.ts';
+import type { AiProfileName } from '../content/campaign.ts';
+import type { Encounter } from '../content/encounters.ts';
+import { encounterById, scaleEncounter } from '../content/encounters.ts';
 import { EFFECTS, EFFECT_BY_ID } from '../content/index.ts';
 import type { CardInstance } from '../core/cardInstance.ts';
 import type { CardLibrary } from '../core/library.ts';
 import type { Rng } from '../core/rng.ts';
 import { createRng } from '../core/rng.ts';
+import { rarityProfile } from '../core/rarity.ts';
 import type { StatKey } from '../core/stats.ts';
 import { CAUTIOUS, RUTHLESS, STEADY, playTurn } from '../duel/ai.ts';
 import type { AiProfile } from '../duel/ai.ts';
@@ -27,7 +33,9 @@ import { Duel } from '../duel/engine.ts';
 import type { DeckEntry } from '../duel/types.ts';
 import { Collection } from './collection.ts';
 import { optionId, rollDraft } from './draft.ts';
-import { applyXpAwards, autoDevelop, computeDuelXp } from './rewards.ts';
+import type { GameMap, MapNode, NodeKind } from './map.ts';
+import { availableMoves, depthStep, generateMap, nodeAt } from './map.ts';
+import { applyXpAwards, autoDevelop } from './rewards.ts';
 
 const PROFILES: Record<AiProfileName, AiProfile> = {
   cautious: CAUTIOUS,
@@ -42,23 +50,37 @@ const FOCUS_PRESETS: readonly (readonly StatKey[])[] = [
   ['speed', 'might'],
 ];
 
-/** How a simulated player develops their cards and plays their turns. */
+/** How a simulated player develops cards, plays turns and picks a route. */
 export interface PlayerStyle {
   readonly name: string;
-  /** The policy the simulated player uses, at every stage. */
   readonly profile: AiProfile;
-  /** Takes the offensive fork at every milestone when true. */
   readonly preferOffence: boolean;
-  /** Picks a stat focus for a card; the harness varies this per archetype. */
   focusFor(definitionId: string, index: number): readonly StatKey[];
+  /** Ranks a node the route could move to; highest wins. */
+  rankNode?(kind: NodeKind): number;
 }
+
+const GREEDY_ROUTE: Record<NodeKind, number> = {
+  elite: 3,
+  cache: 2,
+  battle: 1,
+  rest: 0,
+  boss: 0,
+};
+const SAFE_ROUTE: Record<NodeKind, number> = {
+  rest: 3,
+  cache: 2,
+  battle: 1,
+  elite: 0,
+  boss: 0,
+};
 
 export const BALANCED_STYLE: PlayerStyle = {
   name: 'Balanced',
   profile: STEADY,
   preferOffence: true,
-  focusFor: (_definitionId, index) =>
-    FOCUS_PRESETS[index % FOCUS_PRESETS.length] as readonly StatKey[],
+  focusFor: (_id, index) => FOCUS_PRESETS[index % FOCUS_PRESETS.length] as readonly StatKey[],
+  rankNode: (kind) => GREEDY_ROUTE[kind],
 };
 
 export const AGGRESSIVE_STYLE: PlayerStyle = {
@@ -66,6 +88,7 @@ export const AGGRESSIVE_STYLE: PlayerStyle = {
   profile: RUTHLESS,
   preferOffence: true,
   focusFor: () => ['might'],
+  rankNode: (kind) => GREEDY_ROUTE[kind],
 };
 
 export const DEFENSIVE_STYLE: PlayerStyle = {
@@ -73,24 +96,26 @@ export const DEFENSIVE_STYLE: PlayerStyle = {
   profile: CAUTIOUS,
   preferOffence: false,
   focusFor: () => ['vitality', 'guard'],
+  rankNode: (kind) => SAFE_ROUTE[kind],
 };
 
-export interface DuelOutcome {
-  readonly stage: number;
-  readonly stageName: string;
+export interface FightOutcome {
+  readonly depth: number;
+  readonly kind: NodeKind;
+  readonly encounterId: string;
+  readonly encounterName: string;
+  readonly tier: number;
   readonly won: boolean;
   readonly turns: number;
-  /** Nexus health left on each side, winner first in the pair's own order. */
-  readonly playerNexus: number;
-  readonly enemyNexus: number;
-  readonly playerDeckSize: number;
+  readonly deckSize: number;
 }
 
 export interface RunOutcome {
   readonly cleared: boolean;
-  readonly stagesWon: number;
-  readonly duels: readonly DuelOutcome[];
-  /** Deck as it ended: creature count and effect count. */
+  /** How far up the map the run reached, 0-indexed. */
+  readonly depthReached: number;
+  readonly fights: readonly FightOutcome[];
+  readonly visited: readonly NodeKind[];
   readonly finalCreatures: number;
   readonly finalEffects: number;
 }
@@ -101,31 +126,36 @@ interface RunDeck {
   effects: string[];
 }
 
+/** The level cap of a card's rarity, for firming an encounter up by depth. */
+export function maxLevelOf(library: CardLibrary): (definitionId: string) => number {
+  return (definitionId) => rarityProfile(library.getCard(definitionId).rarity).maxLevel;
+}
+
 function buildStarter(library: CardLibrary, style: PlayerStyle): RunDeck {
   const collection = new Collection(library);
   const roster = STARTER_ROSTER.map(([definitionId, nickname], index) => {
-    const instance = collection.add(definitionId, { nickname });
+    const instance = collection.add(definitionId, { nickname, level: STARTER_LEVEL });
     collection.autoAllocate(instance.instanceId, style.focusFor(definitionId, index));
     return instance.instanceId;
   });
   return { collection, roster, effects: [...STARTER_EFFECTS] };
 }
 
-function buildStage(library: CardLibrary, stage: Stage): {
-  deck: DeckEntry[];
-  instances: CardInstance[];
-} {
+function buildEncounter(
+  library: CardLibrary,
+  encounter: Encounter,
+): { deck: DeckEntry[]; instances: CardInstance[] } {
   const collection = new Collection(library);
   const instances: CardInstance[] = [];
   const deck: DeckEntry[] = [];
 
-  for (const entry of stage.creatures) {
+  for (const entry of encounter.creatures) {
     const instance = collection.add(entry.definitionId, { level: entry.level });
     collection.autoAllocate(instance.instanceId, entry.focus);
     instances.push(collection.get(instance.instanceId));
     deck.push({ kind: 'creature', instanceId: instance.instanceId });
   }
-  for (const effectId of stage.effects) deck.push({ kind: 'effect', effectId });
+  for (const effectId of encounter.effects) deck.push({ kind: 'effect', effectId });
 
   return { deck, instances };
 }
@@ -137,45 +167,35 @@ function playerEntries(run: RunDeck): DeckEntry[] {
   ];
 }
 
-/** Plays one duel out with the AI on both sides. */
-export function simulateDuel(
+export function simulateFight(
   library: CardLibrary,
   run: RunDeck,
-  stage: Stage,
+  encounter: Encounter,
   seed: number,
-  playerProfile: AiProfile = STEADY,
-): { won: boolean; turns: number; playerNexus: number; enemyNexus: number } {
-  const foe = buildStage(library, stage);
+  playerProfile: AiProfile,
+): { won: boolean; turns: number } {
+  const foe = buildEncounter(library, encounter);
   const mine = run.roster.map((id) => run.collection.get(id));
 
   const duel = new Duel(
     [
       { id: 'p1', name: 'You', deck: playerEntries(run) },
-      { id: 'p2', name: stage.name, deck: foe.deck },
+      { id: 'p2', name: encounter.name, deck: foe.deck },
     ],
     library,
     EFFECT_BY_ID,
     [...mine, ...foe.instances],
-    { seed, nexusHealth: stage.nexusHealth },
+    { seed, nexusHealth: encounter.nexusHealth },
   );
 
-  // The opponent plays to its stage's temperament; the simulated player plays
-  // the same way at every stage. Using the stage profile for both sides made
-  // the "player" turn cautious against cautious opponents, which is not a
-  // measurement of the decks — it is a measurement of the opponent's mood.
-  const enemyProfile = PROFILES[stage.profile];
+  const enemyProfile = PROFILES[encounter.profile];
   for (let guard = 0; guard < 400 && !duel.isOver; guard += 1) {
-    const mine = duel.snapshot().activePlayerId === 'p1';
-    playTurn(duel, mine ? playerProfile : enemyProfile);
+    const mineToMove = duel.snapshot().activePlayerId === 'p1';
+    playTurn(duel, mineToMove ? playerProfile : enemyProfile);
   }
 
   const result = duel.result;
-  return {
-    won: result?.winner === 'p1',
-    turns: result?.turns ?? 0,
-    playerNexus: result?.nexus['p1'] ?? 0,
-    enemyNexus: result?.nexus['p2'] ?? 0,
-  };
+  return { won: result?.winner === 'p1', turns: result?.turns ?? 0 };
 }
 
 function draftOnce(library: CardLibrary, run: RunDeck, rng: Rng, style: PlayerStyle): void {
@@ -194,10 +214,8 @@ function draftOnce(library: CardLibrary, run: RunDeck, rng: Rng, style: PlayerSt
   });
   if (offers.length === 0) return;
 
-  // A simulated player takes the strongest body on offer, or an effect when
-  // nothing else is going; good enough to stand in for a reasonable human.
   const creatures = offers.filter((option) => option.kind === 'creature');
-  const pick = creatures.length > 0 ? (creatures[0] as (typeof offers)[number]) : offers[0];
+  const pick = creatures.length > 0 ? creatures[0] : offers[0];
   if (!pick) return;
 
   if (pick.kind === 'creature') {
@@ -212,112 +230,202 @@ function draftOnce(library: CardLibrary, run: RunDeck, rng: Rng, style: PlayerSt
   }
 }
 
+function develop(run: RunDeck, style: PlayerStyle): void {
+  run.roster.forEach((id, index) => {
+    const definitionId = run.collection.get(id).definitionId;
+    autoDevelop(run.collection, id, style.focusFor(definitionId, index), style.preferOffence);
+  });
+}
+
+function award(run: RunDeck, xp: number): void {
+  applyXpAwards(
+    run.collection,
+    run.roster.map((id) => ({
+      instanceId: id,
+      name: run.collection.resolve(id).displayName,
+      xp,
+    })),
+  );
+}
+
+/** Picks the next node by the style's taste, breaking ties with the rng. */
+function chooseNext(map: GameMap, from: string | null, style: PlayerStyle, rng: Rng): string | null {
+  const moves = availableMoves(map, from);
+  if (moves.length === 0) return null;
+  if (!style.rankNode) return rng.pick(moves);
+
+  const ranked = [...moves].sort((a, b) => {
+    const delta = (style.rankNode as (k: NodeKind) => number)(nodeAt(map, b).kind) -
+      (style.rankNode as (k: NodeKind) => number)(nodeAt(map, a).kind);
+    return delta !== 0 ? delta : (rng.next() < 0.5 ? -1 : 1);
+  });
+  return ranked[0] ?? null;
+}
+
 export interface RunOptions {
   readonly seed: number;
   readonly style?: PlayerStyle;
-  /** Draft between duels. Off reproduces a fixed-deck run. */
   readonly draft?: boolean;
 }
 
 export function simulateRun(library: CardLibrary, options: RunOptions): RunOutcome {
   const style = options.style ?? BALANCED_STYLE;
   const rng = createRng(options.seed);
+  const map = generateMap(options.seed);
   const run = buildStarter(library, style);
 
-  const duels: DuelOutcome[] = [];
-  let stagesWon = 0;
+  const fights: FightOutcome[] = [];
+  const visited: NodeKind[] = [];
+  let current: string | null = null;
+  let depth = -1;
 
-  for (let index = 0; index < STAGES.length; index += 1) {
-    const stage = STAGES[index] as Stage;
-    const outcome = simulateDuel(library, run, stage, options.seed + index * 7919, style.profile);
+  for (let step = 0; step < map.rows + 2; step += 1) {
+    const next: string | null = chooseNext(map, current, style, rng);
+    if (next === null) break;
+    current = next;
 
-    duels.push({
-      stage: index,
-      stageName: stage.name,
+    const node: MapNode = nodeAt(map, current);
+    depth = node.row;
+    visited.push(node.kind);
+
+    if (node.kind === 'rest') {
+      award(run, restXp(depth));
+      develop(run, style);
+      continue;
+    }
+    if (node.kind === 'cache') {
+      if (options.draft !== false) draftOnce(library, run, rng, style);
+      develop(run, style);
+      continue;
+    }
+
+    const encounter = scaleEncounter(
+      encounterById(node.encounterId as string),
+      depthStep(depth, map.rows),
+      maxLevelOf(library),
+    );
+    const outcome = simulateFight(
+      library,
+      run,
+      encounter,
+      options.seed + depth * 7919,
+      style.profile,
+    );
+
+    fights.push({
+      depth,
+      kind: node.kind,
+      encounterId: encounter.id,
+      encounterName: encounter.name,
+      tier: encounter.tier,
       won: outcome.won,
       turns: outcome.turns,
-      playerNexus: outcome.playerNexus,
-      enemyNexus: outcome.enemyNexus,
-      playerDeckSize: run.roster.length + run.effects.length,
+      deckSize: run.roster.length + run.effects.length,
     });
 
-    applyXpAwards(run.collection, computeDuelXp(run.collection, run.roster, index + 1, outcome.won));
-
-    if (!outcome.won) break;
-    stagesWon += 1;
-    if (index === STAGES.length - 1) break;
+    award(run, duelXp(depth, outcome.won, node.kind === 'elite'));
+    if (!outcome.won) {
+      return {
+        cleared: false,
+        depthReached: depth,
+        fights,
+        visited,
+        finalCreatures: run.roster.length,
+        finalEffects: run.effects.length,
+      };
+    }
+    if (node.kind === 'boss') break;
 
     if (options.draft !== false) draftOnce(library, run, rng, style);
-    run.roster.forEach((id, i) => {
-      const definitionId = run.collection.get(id).definitionId;
-      autoDevelop(run.collection, id, style.focusFor(definitionId, i), style.preferOffence);
-    });
+    develop(run, style);
   }
 
   return {
-    cleared: stagesWon === STAGES.length,
-    stagesWon,
-    duels,
+    cleared: current === map.bossId,
+    depthReached: depth,
+    fights,
+    visited,
     finalCreatures: run.roster.length,
     finalEffects: run.effects.length,
   };
 }
 
-export interface StageReport {
-  readonly stage: number;
-  readonly name: string;
+export interface DepthReport {
+  readonly depth: number;
   readonly played: number;
   readonly won: number;
   readonly winRate: number;
   readonly averageTurns: number;
-  readonly averageDeckSize: number;
 }
 
 export interface SweepReport {
   readonly runs: number;
   readonly clears: number;
   readonly clearRate: number;
-  readonly stages: readonly StageReport[];
+  readonly averageDepth: number;
+  readonly depths: readonly DepthReport[];
+  readonly byKind: Readonly<Record<string, { played: number; won: number }>>;
+  readonly worst: readonly { readonly name: string; readonly played: number; readonly winRate: number }[];
 }
 
-/** Plays many runs and summarises how far they got. */
 export function sweep(
   library: CardLibrary,
   runs: number,
   options: Omit<RunOptions, 'seed'> = {},
 ): SweepReport {
-  const played = new Array(STAGES.length).fill(0) as number[];
-  const won = new Array(STAGES.length).fill(0) as number[];
-  const turns = new Array(STAGES.length).fill(0) as number[];
-  const deck = new Array(STAGES.length).fill(0) as number[];
+  const rows = 12;
+  const played = new Array(rows).fill(0) as number[];
+  const won = new Array(rows).fill(0) as number[];
+  const turns = new Array(rows).fill(0) as number[];
+  const byKind: Record<string, { played: number; won: number }> = {};
+  const byEncounter = new Map<string, { name: string; played: number; won: number }>();
   let clears = 0;
+  let depthTotal = 0;
 
   for (let i = 0; i < runs; i += 1) {
     const outcome = simulateRun(library, { ...options, seed: 1000 + i * 131 });
     if (outcome.cleared) clears += 1;
-    for (const duel of outcome.duels) {
-      played[duel.stage] = (played[duel.stage] ?? 0) + 1;
-      if (duel.won) won[duel.stage] = (won[duel.stage] ?? 0) + 1;
-      turns[duel.stage] = (turns[duel.stage] ?? 0) + duel.turns;
-      deck[duel.stage] = (deck[duel.stage] ?? 0) + duel.playerDeckSize;
+    depthTotal += outcome.depthReached + 1;
+
+    for (const fight of outcome.fights) {
+      played[fight.depth] = (played[fight.depth] ?? 0) + 1;
+      turns[fight.depth] = (turns[fight.depth] ?? 0) + fight.turns;
+      if (fight.won) won[fight.depth] = (won[fight.depth] ?? 0) + 1;
+
+      byKind[fight.kind] ??= { played: 0, won: 0 };
+      (byKind[fight.kind] as { played: number; won: number }).played += 1;
+      if (fight.won) (byKind[fight.kind] as { played: number; won: number }).won += 1;
+
+      const seen = byEncounter.get(fight.encounterId) ?? {
+        name: fight.encounterName,
+        played: 0,
+        won: 0,
+      };
+      seen.played += 1;
+      if (fight.won) seen.won += 1;
+      byEncounter.set(fight.encounterId, seen);
     }
   }
+
+  const worst = [...byEncounter.values()]
+    .filter((entry) => entry.played >= 10)
+    .map((entry) => ({ name: entry.name, played: entry.played, winRate: entry.won / entry.played }))
+    .sort((a, b) => a.winRate - b.winRate)
+    .slice(0, 5);
 
   return {
     runs,
     clears,
     clearRate: clears / runs,
-    stages: STAGES.map((stage, index) => {
-      const count = played[index] ?? 0;
-      return {
-        stage: index,
-        name: stage.name,
-        played: count,
-        won: won[index] ?? 0,
-        winRate: count === 0 ? 0 : (won[index] ?? 0) / count,
-        averageTurns: count === 0 ? 0 : (turns[index] ?? 0) / count,
-        averageDeckSize: count === 0 ? 0 : (deck[index] ?? 0) / count,
-      };
-    }),
+    averageDepth: depthTotal / runs,
+    depths: played.map((count, depth) => ({
+      depth,
+      played: count,
+      won: won[depth] ?? 0,
+      winRate: count === 0 ? 0 : (won[depth] ?? 0) / count,
+      averageTurns: count === 0 ? 0 : (turns[depth] ?? 0) / count,
+    })),
+    byKind,
+    worst,
   };
 }
